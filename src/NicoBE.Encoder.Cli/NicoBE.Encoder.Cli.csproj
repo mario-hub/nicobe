@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType><DisableWinExeOutputInference>true</DisableWinExeOutputInference>
+    <TargetFramework>net10.0-windows</TargetFramework><UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable><ImplicitUsings>enable</ImplicitUsings><PlatformTarget>x64</PlatformTarget>
+    <ApplicationIcon Condition="Exists('..\..\assets\nicobe.ico')">..\..\assets\nicobe.ico</ApplicationIcon>
+    <ApplicationManifest>..\NicoBE\app.manifest</ApplicationManifest>
+    <AssemblyName>NicoBE.Encoder.Cli</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup><ProjectReference Include="..\NicoBE.Encoder\NicoBE.Encoder.csproj"/></ItemGroup>
+</Project>

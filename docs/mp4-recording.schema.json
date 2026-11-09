@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "NicoBE MP4 Recording Metadata Version 1",
+  "type": "object",
+  "required": [
+    "Version",
+    "PlaybackZeroUtc",
+    "SourceStartUtc",
+    "ServiceId",
+    "NetworkId",
+    "SourceFileName",
+    "DurationSeconds",
+    "SourceFirstVideoPts",
+    "OutputFirstVideoPts"
+  ],
+  "properties": {
+    "Version": {
+      "type": "integer",
+      "const": 1
+    },
+    "PlaybackZeroUtc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "SourceStartUtc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "ServiceId": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "NetworkId": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "SourceFileName": {
+      "type": "string"
+    },
+    "DurationSeconds": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    },
+    "SourceFirstVideoPts": {
+      "type": "number"
+    },
+    "OutputFirstVideoPts": {
+      "type": "number"
+    }
+  },
+  "additionalProperties": true
+}

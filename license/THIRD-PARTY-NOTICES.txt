@@ -1,0 +1,72 @@
+利用コンポーネント・外部ソフト
+
+.NET Runtime / WPF / Windows Forms
+ライセンス: MIT
+.NET 10 Desktop Runtimeを別途インストールして利用します。本アプリにランタイム本体は同梱しません。
+Windows FormsはNicoBEのタスクトレイに使用します。EncoderはWPFを使用します。
+各プロジェクトのライセンス:
+https://github.com/dotnet/runtime/blob/main/LICENSE.TXT
+https://github.com/dotnet/wpf/blob/main/LICENSE.TXT
+https://github.com/dotnet/winforms/blob/main/LICENSE.TXT
+ランタイム内の第三者コンポーネントの通知:
+https://github.com/dotnet/runtime/blob/main/THIRD-PARTY-NOTICES.TXT
+
+MIT License
+
+Copyright (c) .NET Foundation and Contributors
+
+All rights reserved.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
+Microsoft C++ Standard Library（NicoBE GPU描画DLL）
+ライセンス: Apache License 2.0 with LLVM Exception
+Copyright (c) Microsoft Corporation.
+https://github.com/microsoft/STL/blob/main/LICENSE.txt
+
+Microsoft Visual C++ランタイム（NicoBE GPU描画DLL）
+/MTで静的リンクしています。Microsoft Visual Studioの再頒布条件に従うコンポーネントです。NicoBEのMITライセンスに変更するものではありません。
+
+Windows API / Direct3D / Direct2D / DirectWrite / DirectComposition / Windows Imaging Component
+Windowsに含まれるAPIを使用します。これらのOSコンポーネントは本アプリのMITライセンスの対象ではなく、Microsoftの提供条件に従います。GPU描画DLLのNicoBE独自コードはMITです。
+
+FFmpeg 9.0.2（NicoBEのMKV読み取り）
+FFmpegプロジェクトのライブラリをLGPL 2.1以降の条件で利用し、mkvフォルダ内のavformat、avcodec、avutilに動的リンクします。
+ライセンス文書はmkvフォルダ、DLLに対応するソースと再ビルド手順は同時配布のNicoBE-MKV-Source.zipにあります。
+公式ソース: https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz
+配布指針: https://ffmpeg.org/legal.html
+
+zlib 1.3.2（MKV内の圧縮字幕の展開）
+展開部分をavformatに静的リンクします。zlibライセンス文書はmkvフォルダに収録しています。
+
+FFmpeg / ffprobe（NicoBE Encoderが別プロセスとして実行する外部ソフト）
+EncoderのZIPには同梱しません。ダウンロード機能はGyanのessentialsビルドを取得します。この配布ビルドはGPLv3です。手動で指定したFFmpegはビルド構成によりライセンスが異なります。
+導入した配布フォルダに含まれるLICENSEやdocの記載を確認してください。ダウンロード時に同梱文書も保持します。FFmpeg内部のエンコーダーなどは本アプリに直接リンクしていません。
+配布元・構成ライブラリ・対応ソースへのリンク:
+https://www.gyan.dev/ffmpeg/builds/
+FFmpegライセンス案内:
+https://ffmpeg.org/legal.html
+FFmpegソースコード:
+https://github.com/FFmpeg/FFmpeg
+
+MPC-BE / NicoJK
+連携先のアプリ／ログ形式です。本アプリのライブラリとして組み込んでいません。各ソフトのライセンスは各配布元をご確認ください。
+https://github.com/Aleksoid1978/MPC-BE
+https://github.com/xtne6f/NicoJK

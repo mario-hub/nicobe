@@ -1,0 +1,4 @@
+NicoBE:1.0.0
+NicoBE Encoder:1.0.0
+NicoBE Date:2026-11-09
+NicoBE Encoder Date:2026-11-09

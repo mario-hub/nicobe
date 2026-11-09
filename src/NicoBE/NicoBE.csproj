@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <!-- WPF/native windows use the manifest's PerMonitorV2 setting. WinForms is
+         used only for NotifyIcon; its application bootstrap is never called. -->
+    <NoWarn>$(NoWarn);WFO0003</NoWarn>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon Condition="Exists('..\..\assets\nicobe.ico')">..\..\assets\nicobe.ico</ApplicationIcon>
+    <AssemblyName>NicoBE</AssemblyName>
+    <PlatformTarget>x64</PlatformTarget>
+    <RestoreSources></RestoreSources>
+  </PropertyGroup>
+  <ItemGroup><Using Remove="System.Windows.Forms"/><Using Remove="System.Drawing"/></ItemGroup>
+  <ItemGroup>
+    <Content Include="..\NicoBE.Mkv\runtime\NicoBE.Mkv.dll;..\NicoBE.Mkv\runtime\avformat-63.dll;..\NicoBE.Mkv\runtime\avcodec-63.dll;..\NicoBE.Mkv\runtime\avutil-61.dll;..\NicoBE.Mkv\runtime\FFmpeg-LGPL-2.1.txt;..\NicoBE.Mkv\runtime\zlib-LICENSE.txt"
+             Link="mkv\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest"/>
+  </ItemGroup>
+  <!-- Player-launching diagnostics are retained as development sources only. -->
+  <ItemGroup><Compile Remove="AttachTest.cs;ResidentTest.cs;FfmpegInstaller.cs;FfmpegDownloadWindow.cs"/></ItemGroup>
+</Project>

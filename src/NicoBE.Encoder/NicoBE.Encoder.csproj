@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType><TargetFramework>net10.0-windows</TargetFramework><UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable><ImplicitUsings>enable</ImplicitUsings><PlatformTarget>x64</PlatformTarget>
+    <ApplicationIcon Condition="Exists('..\..\assets\nicobe.ico')">..\..\assets\nicobe.ico</ApplicationIcon><ApplicationManifest>..\NicoBE\app.manifest</ApplicationManifest>
+    <AssemblyName>NicoBE.Encoder</AssemblyName><RestoreSources></RestoreSources>
+    <DefineConstants>$(DefineConstants);NICOBE_ENCODER</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="..\NicoBE\SafeFileLog.cs" Link="SafeFileLog.cs"/>
+    <Compile Include="..\NicoBE\FailureTest.cs" Link="FailureTest.cs"/>
+    <Compile Include="..\NicoBE\TsReader.cs" Link="TsReader.cs"/>
+    <Compile Include="..\NicoBE\Mp4RecordingMetadata.cs" Link="Mp4RecordingMetadata.cs"/>
+    <Compile Include="..\NicoBE\Mp4UuidBox.cs" Link="Mp4UuidBox.cs"/>
+    <Compile Include="..\NicoBE\Mp4CommentData.cs" Link="Mp4CommentData.cs"/>
+    <Compile Include="..\NicoBE\LogReader.cs" Link="LogReader.cs"/>
+    <Compile Include="..\NicoBE\AssComments.cs" Link="AssComments.cs"/>
+    <Compile Include="..\NicoBE\ContainerComments.cs" Link="ContainerComments.cs"/>
+    <Compile Include="..\NicoBE\FfmpegInstaller.cs" Link="FfmpegInstaller.cs"/>
+    <Compile Include="..\NicoBE\FfmpegDownloadWindow.cs" Link="FfmpegDownloadWindow.cs"/>
+    <Compile Include="..\NicoBE\ChannelMap.cs" Link="ChannelMap.cs"/>
+    <Compile Include="..\NicoBE\LicensePanel.cs" Link="LicensePanel.cs"/>
+    <Compile Include="..\NicoBE\Config.cs" Link="Config.cs"/>
+    <Compile Include="..\NicoBE\StorageLayout.cs" Link="StorageLayout.cs"/>
+    <Compile Include="..\NicoBE\StorageLayoutTest.cs" Link="StorageLayoutTest.cs"/>
+    <Compile Include="..\NicoBE\NgFilter.cs" Link="NgFilter.cs"/>
+    <Compile Include="..\NicoBE\SettingsTheme.cs" Link="SettingsTheme.cs"/>
+    <Page Include="..\NicoBE\SettingsTheme.xaml" Link="SettingsTheme.xaml"/>
+  </ItemGroup>
+</Project>

@@ -1,0 +1,22 @@
+{
+  "Version": 1,
+  "Channel": "jk4",
+  "Comments": [
+    {
+      "MediaSeconds": 12.345678,
+      "Text": "一行目\n二行目",
+      "Attributes": {
+        "thread": "12345",
+        "no": "0007",
+        "date": "1790000012",
+        "date_usec": "345678",
+        "vpos": "1234",
+        "mail": "184 ue big mincho",
+        "user_id": "example-anonymous-id",
+        "premium": "1",
+        "anonymity": "1",
+        "future_attribute": "変更せず保持"
+      }
+    }
+  ]
+}

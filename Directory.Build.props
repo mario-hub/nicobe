@@ -1,0 +1,25 @@
+<Project>
+  <PropertyGroup>
+    <NicoBEVersionFile>$(MSBuildThisFileDirectory)release/version.txt</NicoBEVersionFile>
+    <NicoBEProductName Condition="'$(MSBuildProjectName)' == 'NicoBE'">NicoBE</NicoBEProductName>
+    <NicoBEProductName Condition="'$(MSBuildProjectName)' == 'NicoBE.Encoder'">NicoBE Encoder</NicoBEProductName>
+    <NicoBEProductName Condition="'$(MSBuildProjectName)' == 'NicoBE.Encoder.Cli'">NicoBE Encoder</NicoBEProductName>
+    <NicoBEVersionText Condition="Exists('$(NicoBEVersionFile)')">$([System.IO.File]::ReadAllText('$(NicoBEVersionFile)'))</NicoBEVersionText>
+    <NicoBEVersion>$([System.Text.RegularExpressions.Regex]::Match('$(NicoBEVersionText)', '(?m)(?&lt;=^$(NicoBEProductName):)[^\r\n]+').Value.Trim())</NicoBEVersion>
+    <Version Condition="'$(NicoBEVersion)' != ''">$(NicoBEVersion)</Version>
+    <AssemblyVersion Condition="'$(NicoBEVersion)' != ''">$(NicoBEVersion).0</AssemblyVersion>
+    <FileVersion Condition="'$(NicoBEVersion)' != ''">$(NicoBEVersion).0</FileVersion>
+    <InformationalVersion>$(NicoBEVersion)</InformationalVersion>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="$(MSBuildThisFileDirectory)license/LICENSE" LogicalName="NicoBE.LICENSE"/>
+    <EmbeddedResource Include="$(MSBuildThisFileDirectory)license/THIRD-PARTY-NOTICES.txt" LogicalName="NicoBE.THIRD-PARTY-NOTICES"/>
+    <None Include="$(MSBuildThisFileDirectory)assets\nicobe.ico" Link="assets\nicobe.ico" CopyToOutputDirectory="PreserveNewest" Condition="Exists('$(MSBuildThisFileDirectory)assets\nicobe.ico')"/>
+  </ItemGroup>
+  <Target Name="ValidateNicoBEVersion" BeforeTargets="PrepareForBuild">
+    <Error Condition="!Exists('$(NicoBEVersionFile)')" Text="release/version.txt がありません。"/>
+    <Error Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('$(NicoBEVersion)', '^\d+\.\d+\.\d+$'))" Text="release/version.txt の $(NicoBEProductName) は major.minor.patch 形式で指定してください。"/>
+    <Error Condition="$([System.Text.RegularExpressions.Regex]::Matches('$(NicoBEVersionText)', '(?m)^$(NicoBEProductName):').Count) != 1" Text="release/version.txt の $(NicoBEProductName) は1行だけ定義してください。"/>
+  </Target>
+</Project>

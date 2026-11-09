@@ -1,0 +1,56 @@
+# Local application binaries and downloaded dependencies
+/app/
+/app-encoder/
+/runtime/
+/encoder/
+/tools/MPC-BE-test/
+/tools/NicoConvAss*/
+/tools/*.zip
+
+# Local settings, channel overrides, and image assets
+/nicobe.json
+/nicobe.json.tmp
+/encoder-settings.json
+/encoder-settings.json.tmp
+/channels.json
+/assets/
+/design/
+/.local/
+/release/index.html
+
+# Build intermediates, caches, diagnostics, and private recordings/comments
+**/bin/
+**/obj/
+/.build-home/
+/.packages/
+/temp/
+/logs/
+/test-input/
+# Legacy verification output from older builds
+/test-results/
+/src/NicoBE.Mkv/.build/
+*.log
+*.tmp
+*.dmp
+*.ts
+*.m2ts
+*.mts
+*.mp4
+*.mkv
+# On case-insensitive filesystems, *.mkv also matches this source directory.
+!/src/NicoBE.Mkv/
+*.ass
+*.jkl
+*.pdb
+*.zip
+*.7z
+
+# Editor and local agent state
+/.vs/
+/.vscode/
+/.codex/
+/.agents/
+*.user
+*.suo
+Thumbs.db
+Desktop.ini

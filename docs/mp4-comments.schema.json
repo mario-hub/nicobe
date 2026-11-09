@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "NicoBE MP4 Comment Format Version 1",
+  "type": "object",
+  "required": [
+    "Version",
+    "Comments"
+  ],
+  "properties": {
+    "Version": {
+      "type": "integer",
+      "const": 1
+    },
+    "Channel": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^jk[0-9]+$",
+          "not": {
+            "pattern": "[\\r\\n]"
+          }
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "Comments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "MediaSeconds",
+          "Text",
+          "Attributes"
+        ],
+        "properties": {
+          "MediaSeconds": {
+            "type": "number",
+            "minimum": 0
+          },
+          "Text": {
+            "type": "string"
+          },
+          "Attributes": {
+            "type": "object",
+            "propertyNames": {
+              "minLength": 1
+            },
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": true
+}
