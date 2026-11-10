@@ -32,6 +32,10 @@ public static class EncoderPreview
     {
         Directory.CreateDirectory(Path.Combine(EncoderPaths.Root,"temp", "test-results"));
         var window=new EncoderWindow(Array.Empty<string>());window.PreviewFailure();var content=(FrameworkElement)window.Content;
+        if(((System.Windows.Controls.TabItem)window.Tabs.Items[3]).Header.ToString()!="その他"
+            || !DateTime.TryParseExact(LicensePanel.ReleaseDate,"yyyy-MM-dd",System.Globalization.CultureInfo.InvariantCulture,System.Globalization.DateTimeStyles.None,out _)
+            || !LicensePanel.WebsiteStartInfo().UseShellExecute || LicensePanel.WebsiteStartInfo().FileName!=LicensePanel.WebsiteUrl)
+            throw new Exception("Other tab metadata or external website target is invalid.");
         double[]? headerLayout=null;
         for(int tab=0;tab<window.Tabs.Items.Count;tab++)
         {

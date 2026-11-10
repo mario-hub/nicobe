@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace NicoBE;
 
 public sealed class ActiveComment
@@ -6,6 +8,7 @@ public sealed class ActiveComment
     public required double Born { get; init; }
     public required int Lane { get; init; }
     public required double Width { get; init; }
+    public required double Velocity { get; init; }
     public int LaneSpan { get; init; }=1;
     public object? Visual { get; init; }
 }
@@ -28,7 +31,7 @@ public sealed class CommentEngine
     public long Dropped { get; private set; }
     public int SeekGeneration { get; private set; }
     // Adjust the extra space between rows; retain the text's own height.
-    public double LaneHeight => config.FontSize*(1+.65*config.LineSpacingPercent/100);
+    public double LaneHeight => config.FontSize*(1+config.LineSpacingPercent/100);
     public Func<Comment,(double Width,double Height,object? Visual)> Measure { get; set; }=c=>(c.Text.Split('\n').Max(l=>l.Length)*28d,(1+c.Text.Count(ch=>ch=='\n'))*Config.BaseFontSize*1.4,null);
     public CommentEngine(Config config) {this.config=config;ng=new(config);}
     public void Reset()
@@ -85,7 +88,7 @@ public sealed class CommentEngine
         Active.RemoveAll(a=>a.Comment.Position==CommentPosition.Scroll ? X(a)+a.Width<0 : MotionSeconds-a.Born>=config.FixedCommentSeconds);
     }
     public double X(ActiveComment a) => a.Comment.Position==CommentPosition.Scroll
-        ? Width-(MotionSeconds-a.Born)*config.ScrollPixelsPerSecond : (Width-a.Width)/2;
+        ? Width-(MotionSeconds-a.Born)*a.Velocity : (Width-a.Width)/2;
     public double Y(ActiveComment a) => a.Lane*LaneHeight+5;
     public void OnSeek(double media,double wall)
     {
@@ -129,6 +132,19 @@ public sealed class CommentEngine
         }
         if(cursor<end){Dropped+=end-cursor;cursor=end;}
     }
+    internal static double LengthSpeedMultiplier(string text)=>CommentMotion.LengthSpeedMultiplier(text);
+    bool BlocksScrolling(ActiveComment ahead,double x,double velocity)
+    {
+        if(velocity==0 || ahead.Comment.Position!=CommentPosition.Scroll)return true;
+        double right=X(ahead)+ahead.Width;
+        if(right<=0)return false;
+        double gap=x-right;
+        if(gap<35)return true;
+        // With constant velocities the gap is linear. Its minimum is now, or
+        // just before the leading comment's trailing edge exits the left edge.
+        double closingSpeed=velocity-ahead.Velocity;
+        return closingSpeed>0 && gap-closingSpeed*(right/ahead.Velocity)<35;
+    }
     private void Add(Comment comment,double born)
     {
         if(ng.Blocks(comment))return;
@@ -140,16 +156,18 @@ public sealed class CommentEngine
         // slightly exceed a lane. Only explicit line breaks occupy extra lanes.
         bool multiline=comment.Text.Contains('\n') || comment.Text.Contains('\r');
         int span=multiline?Math.Max(1,(int)Math.Ceiling(height/LaneHeight)):1;
-        double x=comment.Position==CommentPosition.Scroll?Width-age*config.ScrollPixelsPerSecond:(Width-width)/2;
+        double velocity=comment.Position==CommentPosition.Scroll
+            ? config.ScrollPixelsPerSecond*(config.AccelerateLongComments?LengthSpeedMultiplier(comment.Text):1) : 0;
+        double x=comment.Position==CommentPosition.Scroll?Width-age*velocity:(Width-width)/2;
         if(comment.Position==CommentPosition.Scroll && x+width<0)return;
         int lanes=Math.Max(1,(int)(Height/LaneHeight))-span+1;
         if(lanes<1){Dropped++;return;}
         IEnumerable<int> candidates=comment.Position==CommentPosition.Bottom ? Enumerable.Range(0,lanes).Reverse() : Enumerable.Range(0,lanes);
         foreach(int lane in candidates)
         {
-            bool busy=Active.Any(a=>a.Lane<lane+span && lane<a.Lane+a.LaneSpan && (comment.Position!=CommentPosition.Scroll || a.Comment.Position!=CommentPosition.Scroll || X(a)+a.Width>x-35));
+            bool busy=Active.Any(a=>a.Lane<lane+span && lane<a.Lane+a.LaneSpan && BlocksScrolling(a,x,velocity));
             if(busy) continue;
-            Active.Add(new() {Comment=comment,Born=born,Lane=lane,LaneSpan=span,Width=width,Visual=visual});return;
+            Active.Add(new() {Comment=comment,Born=born,Lane=lane,LaneSpan=span,Width=width,Velocity=velocity,Visual=visual});return;
         }
         Dropped++;
     }

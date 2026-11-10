@@ -6,16 +6,22 @@ namespace NicoBE;
 
 public sealed class Config
 {
-    public const double BaseFontSize = 38.4;
-    public const double BaseScrollPixelsPerSecond = 288;
-    public const double DefaultLineSpacingPercent = 60;
+    public const double BaseFontSize = 48;
+    public const double BaseScrollPixelsPerSecond = 360;
+    public const double DefaultLineSpacingPercent = 30;
+    public const double DefaultScrollSpeedPercent = 100;
+    public const double MinScrollSpeedPercent = 50;
     public string NicoJkLogFolder { get; set; } = "";
     public string FontFamily { get; set; } = "Yu Gothic UI";
+    public int FontWeight { get; set; } = 700;
     public bool CommentsVisible { get; set; } = true;
     public string CommentPreference { get; set; } = "Original";
     public double FontSize { get; set; } = BaseFontSize;
     public double LineSpacingPercent { get; set; } = DefaultLineSpacingPercent;
-    public double ScrollPixelsPerSecond { get; set; } = BaseScrollPixelsPerSecond;
+    public double ScrollPixelsPerSecond { get; set; } = BaseScrollPixelsPerSecond * DefaultScrollSpeedPercent / 100;
+    public bool AccelerateLongComments { get; set; } = true;
+    public bool ColorEmoji { get; set; } = true;
+    public bool PlaybackPanelVisible { get; set; } = true;
     public double FixedCommentSeconds { get; set; } = 5;
     public int MaxVisibleComments { get; set; } = 70;
     public double Opacity { get; set; } = .95;
@@ -35,6 +41,9 @@ public sealed class Config
     public static Config Load(bool requirePaths=true)
     {
         var c = File.Exists(Paths.Config)?JsonSerializer.Deserialize<Config>(File.ReadAllText(Paths.Config), Json) ?? throw new Exception("設定を読み込めません。"):new Config();
+        // Accept the former 100–200% range without preventing startup.
+        if(c.LineSpacingPercent is > 100 and <= 200)c.LineSpacingPercent=100;
+        if(c.ScrollPixelsPerSecond >= 30 && c.ScrollSpeedPercent < MinScrollSpeedPercent)c.ScrollSpeedPercent=MinScrollSpeedPercent;
         c.Validate(requirePaths);return c;
     }
     public void Validate(bool requirePaths=true)
@@ -42,12 +51,13 @@ public sealed class Config
         var c=this;
         if(CommentPreference is not ("Original" or "ASS"))throw new Exception("コメントの優先形式が不正です。");
         if(string.IsNullOrWhiteSpace(FontFamily))throw new Exception("コメントのフォントを指定してください。");
+        if(FontWeight is not (400 or 700 or 900))throw new Exception("文字の太さは400、700、900のいずれかを指定してください。");
         NgIds=NgFilter.Normalize(NgIds,StringComparer.Ordinal);
         NgWords=NgFilter.Normalize(NgWords,StringComparer.OrdinalIgnoreCase);
         if (requirePaths && !Directory.Exists(c.NicoJkLogFolder)) throw new Exception("NicoJKのログフォルダが見つかりません。");
-        if (!double.IsFinite(c.FontSize) || c.FontSize is < 16 or > 115.2
-            || !double.IsFinite(c.LineSpacingPercent) || c.LineSpacingPercent is < 0 or > 200
-            || c.ScrollPixelsPerSecond is < 30 or > 1000 || c.MaxVisibleComments is < 1 or > 300
+        if (!double.IsFinite(c.FontSize) || c.FontSize < 16 || c.FontSize > BaseFontSize*3
+            || !double.IsFinite(c.LineSpacingPercent) || c.LineSpacingPercent is < 0 or > 100
+            || !double.IsFinite(c.ScrollPixelsPerSecond) || c.ScrollSpeedPercent < MinScrollSpeedPercent || c.ScrollPixelsPerSecond > BaseScrollPixelsPerSecond*3 || c.MaxVisibleComments is < 1 or > 300
             || c.PollIntervalMs is < 40 or > 500 || c.FixedCommentSeconds is < 1 or > 30 || c.Opacity is < .1 or > 1
             || !double.IsFinite(c.CommentOffsetSeconds)) throw new Exception("nicobe.json の描画設定が範囲外です。");
     }

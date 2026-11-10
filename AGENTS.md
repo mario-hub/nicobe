@@ -21,7 +21,8 @@ UIと制御処理はC#／.NET 10／WPF、コメント描画はC++／Direct3Dを�
 | `tools` | ビルド・検証・後片付けのスクリプト |
 | `docs` | 公開する技術仕様・Schema・サンプル |
 | `license` | 独自コードのLICENSE、第三者通知 |
-| `release/version.txt` | アプリのバージョン・公開日の定義 |
+| `release/version.txt` | NicoBEのバージョン・公開日・更新履歴 |
+| `release/version_encoder.txt` | Encoderのバージョン・公開日・更新履歴（GUI／CLI共通） |
 | `release` | 配布ZIP作成の入口と生成物 |
 | `app`、`app-encoder` | ローカルの実行ファイルと実行時データ。Git対象外 |
 | `temp` | 一時ファイル。ビルドログ・検証出力は `temp/test-results`。Git対象外 |
@@ -51,7 +52,7 @@ UIと制御処理はC#／.NET 10／WPF、コメント描画はC++／Direct3Dを�
 
 ## 実装上の注意
 
-- バージョンは `release/version.txt` を唯一の定義元とし、`Directory.Build.props` から取り込みます。CLIはEncoderと同じバージョンを使います。
+- バージョン・公開日・更新履歴はNicoBEが `release/version.txt`、Encoderが `release/version_encoder.txt` を定義元とします。`## major.minor.patch (yyyy-MM-dd)` と更新内容の箇条書きを新しい順に記載し、`Directory.Build.props` は先頭のバージョン・公開日を取り込み、両アプリの「その他」タブに表示します。CLIはEncoderと同じファイルを使います。配布ページは履歴ファイルの内容を、約8行分の固定高のスクロール枠に表示します。
 - データ保存先の判定は共通の `StorageLayout` を使用します。Program Files／Program Files (x86)配下だけLocalAppDataへ保存し、それ以外は実行ファイルの隣を使います。権限エラーによる保存先の自動変更は行いません。配置判定のテストには模擬パスを使います。
 - アイコン・ネイティブDLLは実行ファイルの隣から読みます。CLIの相対引数はカレントディレクトリ基準、設定JSON内の相対パスはJSONの所在フォルダ基準です。
 - 待機中のCPU・メモリ負荷に配慮し、監視・タイマー・GPUリソースの寿命を確認します。ファイル切り替えと複数プレイヤーの終了処理を考慮してください。

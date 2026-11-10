@@ -18,6 +18,9 @@ public static class Program
         System.Windows.Media.RenderOptions.ProcessRenderMode=System.Windows.Interop.RenderMode.SoftwareOnly;
         if(args.Contains("--failure-test"))return FailureTest.Run();
         if(args.Contains("--gpu-recovery-test"))return GpuNative.RunRecoveryTest();
+        if(args.Contains("--emoji-test"))return GpuNative.RunEmojiTest();
+        if(args.Contains("--playback-panel-test"))return PlaybackPanelTest.Run();
+        if(args.Contains("--mpc-control-test"))return MpcControlTest.Run();
         if(args.Contains("--storage-test"))return StorageLayoutTest.Run();
         if(args.Contains("--live-test"))return LiveCommentTest.Run();
         if(args.Contains("--watcher-test"))return WatcherTest.Run(args.First(a=>!a.StartsWith("--")),args.Contains("--memory-only"));

@@ -70,6 +70,7 @@ browser.on('error',error=>{for(const task of pending.values()){clearTimeout(task
   const baseline='(()=>{const h=document.querySelector(".title h1"),img=document.querySelector(".title img"),mark=document.createElement("span");mark.style.cssText="display:inline-block;width:0;height:0";h.appendChild(mark);const delta=mark.getBoundingClientRect().top-(img.getBoundingClientRect().top+img.getBoundingClientRect().height*205/256);mark.remove();return Math.abs(delta);})()';
   result.baseline=[await evaluate(baseline)];
   result.details=await evaluate('(()=>{const details=document.querySelector("#faq details");details.querySelector("summary").click();const ok=details.open;details.querySelector("summary").click();return ok&&!details.open;})()');
+  result.releaseHistory=await evaluate("(()=>{const boxes=Array.from(document.querySelectorAll(\".history-text\"));const cards=Array.from(document.querySelectorAll(\"#download .downloads tbody>tr\"));const buttons=Array.from(document.querySelectorAll(\"#download .downloads .download-link\"));if(boxes.length!==2||cards.length!==2)return false;const heights=cards.map(x=>x.getBoundingClientRect().height);const tops=buttons.map(x=>x.getBoundingClientRect().top);const regions=boxes.map(x=>x.getBoundingClientRect());return Math.abs(heights[0]-heights[1])<1&&Math.abs(tops[0]-tops[1])<1&&Math.abs(regions[0].height-regions[1].height)<1&&Math.abs(regions[0].top-regions[1].top)<1&&boxes.every(box=>{const style=getComputedStyle(box);if(box.tabIndex!==0||style.overflowY!==\"auto\"||Math.abs(box.getBoundingClientRect().height-(parseFloat(style.lineHeight)*8+26))>1)return false;if(box.scrollHeight>box.clientHeight){box.scrollTop=30;const moved=box.scrollTop>0;box.scrollTop=0;return moved;}return true;});})()");
   result.anchors=await evaluate('[...document.querySelectorAll("a[href^=\\\"#\\\"]")].every(a=>document.getElementById(a.getAttribute("href").slice(1)))');
   result.mobile=[];
   for(const width of [390,320]){
@@ -80,7 +81,7 @@ browser.on('error',error=>{for(const task of pending.values()){clearTimeout(task
    if(width===390)fs.writeFileSync(path.join(out,'mobile.png'),Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
   }
   result.externalRequests=requests.filter(url=>/^https?:/.test(url));result.errors=errors;
-  result.passed=result.desktop.scrollWidth<=result.desktop.width&&result.mobile.every(x=>x.scrollWidth<=x.width)&&result.desktop.images.every(i=>i.loaded)&&result.downloadLinks&&result.metadata&&result.canonical&&result.analytics&&result.baseline.every(x=>x<1)&&result.details&&result.anchors&&errors.length===0&&result.externalRequests.length===0;
+  result.passed=result.desktop.scrollWidth<=result.desktop.width&&result.mobile.every(x=>x.scrollWidth<=x.width)&&result.desktop.images.every(i=>i.loaded)&&result.downloadLinks&&result.metadata&&result.canonical&&result.analytics&&result.baseline.every(x=>x<1)&&result.details&&result.releaseHistory&&result.anchors&&errors.length===0&&result.externalRequests.length===0;
   fs.writeFileSync(path.join(out,'checks.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result));
   await call('Browser.close');if(!result.passed)process.exitCode=1;
  }catch(error){console.error(error);process.exitCode=1;}

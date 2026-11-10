@@ -48,14 +48,35 @@ public sealed class ResidentController : IDisposable
         };
         watch=new PlayerWatcher(TryAttach);watch.Start();
         ScheduleIdleCleanup();
-        if(showTray && !config.SetupCompleted)Dispatcher.CurrentDispatcher.BeginInvoke(ShowSettings);
+        if(showTray && !config.SetupCompleted)Dispatcher.CurrentDispatcher.BeginInvoke(()=>ShowSettings(false));
     }
-    public void ShowSettings()
+    public void ShowSettings()=>ShowSettings(true);
+    void ShowPlayerSettings(nint player)
+    {
+        ShowSettings(false,player);
+        var requested=settings;
+        if(requested==null)return;
+        // The panel deliberately rejects mouse activation. Finish that input
+        // event before explicitly activating the settings requested by the user.
+        dispatcher.BeginInvoke(()=>
+        {
+            if(!disposed && ReferenceEquals(settings,requested) && requested.IsVisible)
+                SettingsPlacement.BringToFront(requested,player);
+        },DispatcherPriority.Input);
+    }
+    void ShowSettings(bool nearPointer,nint player=0)
     {
         if(disposed)return;
-        if(settings!=null){settings.Activate();return;}
+        if(settings!=null)
+        {
+            if(settings.WindowState==WindowState.Minimized)settings.WindowState=WindowState.Normal;
+            if(player!=0)SettingsPlacement.CenterOnPlayer(settings,player);
+            settings.Activate();return;
+        }
         settings=new SettingsWindow(config,ApplySettings,readNgLog:()=>sessions.FirstOrDefault(s=>s.PlayerId.HasValue)?.NgSnapshot(),readDiagnostics:()=>
             diagnostics.Count==0?"エラーの記録はありません。\nログ: "+Paths.Logs:string.Join("\n\n",diagnostics.Reverse())+"\n\nログ: "+Paths.Logs);
+        if(player!=0)SettingsPlacement.CenterOnPlayer(settings,player);
+        else if(nearPointer)SettingsPlacement.NearPointer(settings);
         idleCleanup.Stop();
         settings.Closed+=(_,_)=>{settings=null;ScheduleIdleCleanup();};settings.Show();
     }
@@ -70,7 +91,7 @@ public sealed class ResidentController : IDisposable
     MainWindow CreateSession()
     {
         idleCleanup.Stop();
-        var session=new MainWindow(config);session.Failure+=ReportFailure;session.InitializeHidden();sessions.Add(session);return session;
+        var session=new MainWindow(config);session.Failure+=ReportFailure;session.SettingsRequested+=ShowPlayerSettings;session.InitializeHidden();sessions.Add(session);return session;
     }
     void ReportFailure(string message)
     {
@@ -89,6 +110,7 @@ public sealed class ResidentController : IDisposable
     {
         if(!sessions.Remove(session))return;
         session.Failure-=ReportFailure;
+        session.SettingsRequested-=ShowPlayerSettings;
         if(exits.Remove(session,out var subscription))subscription.Process.Exited-=subscription.Handler;
         session.ShutdownSession();ScheduleIdleCleanup();
     }

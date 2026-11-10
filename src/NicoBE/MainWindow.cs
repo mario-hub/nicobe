@@ -18,6 +18,7 @@ public sealed class MainWindow : Window
     readonly DispatcherTimer poll;
     readonly CommentEngine engine;
     readonly OverlayWindow overlay;
+    readonly PlaybackPanel playbackPanel;
     MpcClient? mpc;
     readonly SubtitleControl subtitles;
     CancellationTokenSource? preparation;
@@ -31,6 +32,7 @@ public sealed class MainWindow : Window
     int gpuRecoveryAttempts;
     double nextGpuRecovery,gpuHealthySince;
     internal event Action<string>? Failure;
+    internal event Action<nint>? SettingsRequested;
     void ReportFailure(string category,string message)
     {
         status.Text=message;
@@ -65,6 +67,7 @@ public sealed class MainWindow : Window
     public MainWindow(Config config)
     {
         this.config=config;engine=new(config);overlay=new(engine,config);
+        playbackPanel=new((command,value)=>mpc?.SendControlAsync(command,value)??Task.FromResult(false),()=>SettingsRequested?.Invoke(mpc?.PlayerWindow??0)) {Enabled=config.PlaybackPanelVisible};
         subtitles=new((command,value)=>mpc?.Send(command,value)??false);
         CommentsVisible=config.CommentsVisible;
         Title="NicoBE — MPC-BE 実況コメント";Width=760;Height=490;MinWidth=650;MinHeight=440;
@@ -73,8 +76,8 @@ public sealed class MainWindow : Window
         root.Children.Add(new TextBlock {Text="NicoBE",FontSize=28,FontWeight=FontWeights.Bold});
         var controls=new StackPanel {Orientation=Orientation.Horizontal};controls.Children.Add(showComments);
         controls.Children.Add(new TextBlock {Text="再生速度",VerticalAlignment=VerticalAlignment.Center,Margin=new Thickness(0,0,8,0)});
-        var speed=new ComboBox {Width=95,FontSize=16,ItemsSource=new[]{"0.5×","1×","1.5×","2×","3×"},SelectedIndex=1};
-        speed.SelectionChanged+=(_,_)=>{if(speed.SelectedItem is string s)mpc?.Send(MpcClient.SetSpeed,s.Replace("×",""));};
+        var speed=new ComboBox {Width=95,FontSize=16,ItemsSource=PlaybackPanelWindow.Speeds.Select(s=>s.ToString("0.0#",CultureInfo.InvariantCulture)+"×").ToArray(),SelectedIndex=1};
+        speed.SelectionChanged+=async (_,_)=>{if(speed.SelectedIndex>=0)await playbackPanel.ChangeSpeedAsync(PlaybackPanelWindow.Speeds[speed.SelectedIndex]);};
         controls.Children.Add(speed);root.Children.Add(controls);
         position.Margin=new Thickness(0,14,0,8);root.Children.Add(position);
         status.Text="待機中";status.FontWeight=FontWeights.SemiBold;status.TextWrapping=TextWrapping.Wrap;root.Children.Add(status);
@@ -89,7 +92,7 @@ public sealed class MainWindow : Window
         Closed+=(_,_)=>
         {
             closing=true;StopLiveComments();preparation?.Cancel();preparation?.Dispose();preparation=null;poll.Stop();
-            subtitles.Restore();engine.Reset();overlay.Close();currentFile=null;
+            playbackPanel.Dispose();subtitles.Restore();engine.Reset();overlay.Close();currentFile=null;
             if(mpc!=null){mpc.Message-=OnMessage;mpc.Dispose();mpc=null;}
         };
     }
@@ -100,6 +103,7 @@ public sealed class MainWindow : Window
     public void ApplySettings(bool reloadLogs)
     {
         if(closing)return;
+        playbackPanel.Enabled=config.PlaybackPanelVisible;
         CommentsVisible=config.CommentsVisible;
         overlay.RefreshFont();
         engine.RefreshSettings();
@@ -170,6 +174,7 @@ public sealed class MainWindow : Window
             case MpcClient.SubtitleTracks:
                 subtitles.Receive(value);break;
             case MpcClient.Connect:
+                playbackPanel.Reset();
                 knownPlaying=null;inferencePosition=null;lastInferredMovement=now;engine.SetPlaying(false,now);
                 TraceLog.Write("connected "+value);mpc!.Send(MpcClient.GetNowPlaying);mpc.Send(MpcClient.GetPosition);break;
             case MpcClient.PlayMode:
@@ -198,10 +203,10 @@ public sealed class MainWindow : Window
                 if(entries.Length>1 && int.TryParse(entries[^1],out int index) && index>=0 && index<entries.Length-1 && File.Exists(entries[index]))OnPlayerFile(entries[index]);
                 break;
             case MpcClient.State:
-                if(value is "0" or "3") {StopLiveComments();subtitles.Reset();generation++;preparation?.Cancel();currentFile=null;engine.Reset();}
+                if(value is "0" or "3") {playbackPanel.Reset();StopLiveComments();subtitles.Reset();generation++;preparation?.Cancel();currentFile=null;engine.Reset();}
                 break;
             case MpcClient.Disconnect:
-                StopLiveComments();subtitles.Reset();generation++;preparation?.Cancel();currentFile=null;knownPlaying=null;inferencePosition=null;engine.Reset();status.Text="MPC-BEは終了しました。";break;
+                playbackPanel.Reset();StopLiveComments();subtitles.Reset();generation++;preparation?.Cancel();currentFile=null;knownPlaying=null;inferencePosition=null;engine.Reset();status.Text="MPC-BEは終了しました。";break;
             case MpcClient.End:
                 engine.SetPlaying(false,now);engine.Active.Clear();status.Text="再生終了。";break;
         }
@@ -209,12 +214,14 @@ public sealed class MainWindow : Window
     }
     void OnPlayerFile(string file)
     {
-        if(!string.Equals(Path.GetFullPath(file),currentFile,StringComparison.OrdinalIgnoreCase))_=PrepareCommentsAsync(file);
+        if(!string.Equals(Path.GetFullPath(file),currentFile,StringComparison.OrdinalIgnoreCase)){playbackPanel.Reset();_=PrepareCommentsAsync(file);}
     }
     void Poll(object? sender,EventArgs e)
     {
         if(mpc==null)return;
         mpc.Watch();
+        // Speed changes can delay position replies; that must not hide the controls.
+        playbackPanel.Tick(mpc.PlayerWindow,currentFile!=null,wall.Elapsed.TotalSeconds);
         mpc.Send(MpcClient.GetPosition);
         PublishScene();
         var gpu=overlay.GetStats();

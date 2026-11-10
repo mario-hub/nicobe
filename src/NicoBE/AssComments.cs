@@ -9,6 +9,8 @@ namespace NicoBE;
 
 public static class AssComments
 {
+    // Preserve the interpretation of older exports and third-party ASS files.
+    internal const double ReferenceFontSize = 38.4;
     static readonly CultureInfo Culture = CultureInfo.InvariantCulture;
     static readonly Regex Tags = new(@"\{([^}]*)\}", RegexOptions.Compiled, TimeSpan.FromSeconds(1));
     static readonly Regex Alignment = new(@"\\an([1-9])", RegexOptions.Compiled, TimeSpan.FromSeconds(1));
@@ -18,10 +20,11 @@ public static class AssComments
     // Yu Gothic UI Bold: 2210 + 514 units per 2048-unit em.
     internal const double ExportFontScale = 2724d / 2048;
     const string ExportStyle = "NicoBE_Em_1.330078125";
-    sealed record Style(double Size, string Color, int Alignment, double EmScale = 1);
-    sealed record Placement(double Start, double End, double Width, double Height, double Y, bool Scroll)
+    static readonly Regex ExportMetrics = new(@"^NicoBE_Em_([0-9.]+)_Base([0-9.]+)$", RegexOptions.CultureInvariant);
+    sealed record Style(double Size, string Color, int Alignment, double EmScale = 1, double ReferenceSize = ReferenceFontSize);
+    sealed record Placement(double Start, double End, double Width, double Height, double Y, double Speed, int Lane, int Span)
     {
-        public double X(double time) => Scroll ? 1920 - (time - Start) * Config.BaseScrollPixelsPerSecond : (1920 - Width) / 2;
+        public double X(double time) => Speed>0 ? 1920 - (time - Start) * Speed : (1920 - Width) / 2;
     }
 
     public static List<Comment> Read(string text, CancellationToken token)
@@ -61,7 +64,14 @@ public static class AssComments
                 string colorValue = Field("PrimaryColour");
                 if (ssa && int.TryParse(colorValue, NumberStyles.Integer, Culture, out int decimalColor))
                     colorValue = unchecked((uint)decimalColor).ToString("X8", Culture);
-                styles[name] = new(Number(Field("Fontsize"), 38.4), Color(colorValue), styleAlignment, name == ExportStyle ? ExportFontScale : 1);
+                var metrics=ExportMetrics.Match(name);
+                double emScale=name==ExportStyle?ExportFontScale:1,reference=ReferenceFontSize;
+                if(metrics.Success)
+                {
+                    emScale=Math.Clamp(Number(metrics.Groups[1].Value,1),.5,4);
+                    reference=Math.Clamp(Number(metrics.Groups[2].Value,ReferenceFontSize),16,144);
+                }
+                styles[name] = new(Number(Field("Fontsize"), 38.4), Color(colorValue), styleAlignment, emScale,reference);
             }
             if (!section.Equals("[Events]", StringComparison.OrdinalIgnoreCase) || !key.Equals("Dialogue", StringComparison.OrdinalIgnoreCase)) continue;
             if (!Time(Field("Start"), out double start) || !Time(Field("End"), out double end) || end <= start) continue;
@@ -77,7 +87,7 @@ public static class AssComments
                 : align >= 7 ? CommentPosition.Top : CommentPosition.Bottom;
             string plain = Tags.Replace(content, "").Replace(@"\N", "\n").Replace(@"\n", "\n").Replace(@"\h", " ").Trim();
             if (plain.Length is 0 or > 1000) continue;
-            double scale = Math.Clamp(size / style.EmScale / resolutionY * 1080 / Config.BaseFontSize, .25, 3);
+            double scale = Math.Clamp(size / style.EmScale / resolutionY * 1080 / style.ReferenceSize, .25, 3);
             if (seen.Add((start, plain, color, scale, position))) comments.Add(new(start, plain, color, scale, position));
             if (comments.Count > 500000) throw new InvalidDataException("ASSのコメント数が上限を超えました。");
         }
@@ -112,39 +122,47 @@ public static class AssComments
         return $"{centiseconds / 360000}:{centiseconds / 6000 % 60:00}:{centiseconds / 100 % 60:00}.{centiseconds % 100:00}";
     }
 
-    public static void Write(string path, IReadOnlyList<Comment> comments, CancellationToken token, double durationLimit = double.PositiveInfinity)
+    public static int Write(string path, IReadOnlyList<Comment> comments, CancellationToken token, double durationLimit = double.PositiveInfinity, double fontSizePercent = 100)
     {
+        if(!double.IsFinite(fontSizePercent) || fontSizePercent is <50 or >200)throw new ArgumentOutOfRangeException(nameof(fontSizePercent));
+        var defaults=new Config(); // Product defaults, never the user's saved player settings.
+        double baseSize=defaults.FontSize*fontSizePercent/100;
+        string styleName=ExportStyle+"_Base"+defaults.FontSize.ToString("0.###",Culture);
+        string alpha=((int)Math.Round((1-defaults.Opacity)*255)).ToString("X2",Culture);
         using var writer = new StreamWriter(path, false, new UTF8Encoding(false));
         writer.WriteLine("[Script Info]\nTitle: NicoBE Comments\nScriptType: v4.00+\nPlayResX: 1920\nPlayResY: 1080\nWrapStyle: 2\nScaledBorderAndShadow: yes\n\n[V4+ Styles]");
         writer.WriteLine("Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding");
-        writer.WriteLine($"Style: {ExportStyle},Yu Gothic UI,{(Config.BaseFontSize * ExportFontScale).ToString("0.###", Culture)},&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,2,0,7,0,0,0,1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text");
-        var typeface = new Typeface(new FontFamily("Yu Gothic UI"), FontStyles.Normal, FontWeights.Bold, FontStretches.Normal);
-        double laneHeight = Config.BaseFontSize * (1 + .65 * Config.DefaultLineSpacingPercent / 100);
+        writer.WriteLine($"Style: {styleName},{defaults.FontFamily},{(baseSize * ExportFontScale).ToString("0.###", Culture)},&H{alpha}FFFFFF,&H{alpha}FFFFFF,&H{alpha}000000,&H{alpha}000000,{(defaults.FontWeight>=700?-1:0)},0,0,0,100,100,0,0,1,2,0,7,0,0,0,1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text");
+        var typeface = new Typeface(new FontFamily(defaults.FontFamily), FontStyles.Normal, FontWeight.FromOpenTypeWeight(defaults.FontWeight), FontStretches.Normal);
+        double laneHeight = baseSize * (1 + defaults.LineSpacingPercent / 100);
         var active = new List<Placement>();
+        int written=0;
         foreach (var comment in comments)
         {
             token.ThrowIfCancellationRequested();
-            double size = Config.BaseFontSize * comment.SizeScale;
+            double size = baseSize * comment.SizeScale;
             string escaped = comment.Text.Replace('{', '｛').Replace('}', '｝').Replace('\\', '＼').Replace("\r\n", "\n").Replace('\r', '\n');
             var text = new FormattedText(escaped, CultureInfo.GetCultureInfo("ja-JP"), FlowDirection.LeftToRight, typeface, size, Brushes.White, 1);
             double width = text.WidthIncludingTrailingWhitespace;
             double height = Math.Max(text.Height,size * ExportFontScale);
-            double duration = comment.Position == CommentPosition.Scroll ? (1920 + width) / Config.BaseScrollPixelsPerSecond : 5;
+            double speed=comment.Position==CommentPosition.Scroll?defaults.ScrollPixelsPerSecond*(defaults.AccelerateLongComments?CommentMotion.LengthSpeedMultiplier(comment.Text):1):0;
+            double duration = speed>0 ? (1920 + width) / speed : defaults.FixedCommentSeconds;
             duration = Math.Min(duration, durationLimit - comment.MediaSeconds);
             if (duration < .01) continue;
             active.RemoveAll(a => a.End <= comment.MediaSeconds);
-            int lanes = Math.Max(1, (int)((1080 - 10 - height) / laneHeight) + 1);
+            if(active.Count>=defaults.MaxVisibleComments)continue;
+            int span=escaped.Contains('\n')?Math.Max(1,(int)Math.Ceiling(height/laneHeight)):1;
+            int lanes=Math.Max(1,(int)(1080/laneHeight))-span+1;
             Placement? chosen = null;
-            int fewest = int.MaxValue;
-            for (int lane = 0; lane < lanes; lane++)
+            for (int index = 0; index < lanes; index++)
             {
-                double top = comment.Position == CommentPosition.Bottom ? 1080 - 5 - height - lane * laneHeight : 5 + lane * laneHeight;
-                var candidate = new Placement(comment.MediaSeconds, comment.MediaSeconds + duration, width, height, top, comment.Position == CommentPosition.Scroll);
-                int overlaps = active.Count(a => Intersects(a, candidate));
-                if (overlaps < fewest) { chosen = candidate; fewest = overlaps; }
-                if (overlaps == 0) break;
+                int lane=comment.Position==CommentPosition.Bottom?lanes-1-index:index;
+                double top=5+lane*laneHeight;
+                var candidate = new Placement(comment.MediaSeconds, comment.MediaSeconds + duration, width, height, top, speed,lane,span);
+                if(!active.Any(a=>Intersects(a,candidate))){chosen=candidate;break;}
             }
-            var placed = chosen!;
+            if(chosen==null)continue;
+            var placed = chosen;
             active.Add(placed);
             string y = placed.Y.ToString("0.###", Culture);
             string movement = comment.Position == CommentPosition.Scroll
@@ -153,13 +171,16 @@ public static class AssComments
             escaped=escaped.Replace("\n",@"\N");
             string rgb = comment.Color.TrimStart('#');
             string bgr = rgb[4..6] + rgb[2..4] + rgb[..2];
-            writer.WriteLine($"Dialogue: 0,{Stamp(comment.MediaSeconds)},{Stamp(comment.MediaSeconds + duration)},{ExportStyle},,0,0,0,,{{{movement}\\fs{(size * ExportFontScale).ToString("0.###", Culture)}\\c&H{bgr}&}}{escaped}");
+            writer.WriteLine($"Dialogue: 0,{Stamp(comment.MediaSeconds)},{Stamp(comment.MediaSeconds + duration)},{styleName},,0,0,0,,{{{movement}\\fs{(size * ExportFontScale).ToString("0.###", Culture)}\\c&H{bgr}&}}{escaped}");
+            written++;
         }
+        return written;
     }
 
     static bool Intersects(Placement first, Placement second)
     {
-        if (first.Y + first.Height + 2 <= second.Y || second.Y + second.Height + 2 <= first.Y) return false;
+        if (first.Lane+first.Span<=second.Lane || second.Lane+second.Span<=first.Lane) return false;
+        if(first.Speed==0 || second.Speed==0)return true;
         // Linear motion: if the same rectangle stays to one side at both ends,
         // it cannot collide during their shared lifetime. This allows row reuse.
         double end = Math.Min(first.End, second.End);

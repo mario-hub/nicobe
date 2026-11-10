@@ -3,8 +3,8 @@
 #include <windows.h>
 #include <d3d11.h>
 #include <dxgi1_3.h>
-#include <d2d1_1.h>
-#include <dwrite.h>
+#include <d2d1_3.h>
+#include <dwrite_3.h>
 #include <dcomp.h>
 #include <wincodec.h>
 #include <wrl/client.h>
@@ -32,19 +32,55 @@ struct ComScope { HRESULT hr=CoInitializeEx(nullptr,COINIT_MULTITHREADED);~ComSc
 // rasterized by Direct2D on the hardware device, once per cached comment.
 class Outline final : public IDWriteTextRenderer {
     ID2D1DeviceContext* dc;ID2D1Factory1* factory;ID2D1Brush* fill;ID2D1Brush* edge;
+    IDWriteFactory4* colorWrite;ID2D1DeviceContext4* colorDc;
 public:
-    Outline(ID2D1DeviceContext* d,ID2D1Factory1* f,ID2D1Brush* b,ID2D1Brush* e):dc(d),factory(f),fill(b),edge(e){}
+    Outline(ID2D1DeviceContext* d,ID2D1Factory1* f,ID2D1Brush* b,ID2D1Brush* e,IDWriteFactory4* w,ID2D1DeviceContext4* c):dc(d),factory(f),fill(b),edge(e),colorWrite(w),colorDc(c){}
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid,void** p) override {if(!p)return E_POINTER;*p=nullptr;if(iid==__uuidof(IUnknown)||iid==__uuidof(IDWriteTextRenderer)||iid==__uuidof(IDWritePixelSnapping)){*p=this;return S_OK;}return E_NOINTERFACE;}
     ULONG STDMETHODCALLTYPE AddRef() override{return 1;} ULONG STDMETHODCALLTYPE Release() override{return 1;}
     HRESULT STDMETHODCALLTYPE IsPixelSnappingDisabled(void*,BOOL* p) override{*p=TRUE;return S_OK;}
     HRESULT STDMETHODCALLTYPE GetCurrentTransform(void*,DWRITE_MATRIX* p) override{*p={1,0,0,1,0,0};return S_OK;}
     HRESULT STDMETHODCALLTYPE GetPixelsPerDip(void*,FLOAT* p) override{*p=1;return S_OK;}
-    HRESULT STDMETHODCALLTYPE DrawGlyphRun(void*,FLOAT x,FLOAT y,DWRITE_MEASURING_MODE,const DWRITE_GLYPH_RUN* run,const DWRITE_GLYPH_RUN_DESCRIPTION*,IUnknown*) override {
+    HRESULT Monochrome(FLOAT x,FLOAT y,const DWRITE_GLYPH_RUN* run) {
         try {ComPtr<ID2D1PathGeometry> path;Check(factory->CreatePathGeometry(&path));ComPtr<ID2D1GeometrySink> sink;Check(path->Open(&sink));
             Check(run->fontFace->GetGlyphRunOutline(run->fontEmSize,run->glyphIndices,run->glyphAdvances,run->glyphOffsets,run->glyphCount,run->isSideways,run->bidiLevel%2,sink.Get()));Check(sink->Close());
             D2D1_MATRIX_3X2_F old;dc->GetTransform(&old);dc->SetTransform(D2D1::Matrix3x2F::Translation(x,y)*old);
             dc->DrawGeometry(path.Get(),edge,2.5f);dc->FillGeometry(path.Get(),fill);dc->SetTransform(old);return S_OK;
         } catch(HRESULT hr){return hr;}
+    }
+    HRESULT STDMETHODCALLTYPE DrawGlyphRun(void*,FLOAT x,FLOAT y,DWRITE_MEASURING_MODE mode,const DWRITE_GLYPH_RUN* run,const DWRITE_GLYPH_RUN_DESCRIPTION* description,IUnknown*) override {
+        // Keep system shaping/fallback and advances unchanged. Only rasterization
+        // differs; unsupported glyphs retain the existing outlined text rendering.
+        if(!colorWrite||!colorDc)return Monochrome(x,y,run);
+        constexpr auto formats=static_cast<DWRITE_GLYPH_IMAGE_FORMATS>(DWRITE_GLYPH_IMAGE_FORMATS_TRUETYPE|DWRITE_GLYPH_IMAGE_FORMATS_CFF|DWRITE_GLYPH_IMAGE_FORMATS_COLR|DWRITE_GLYPH_IMAGE_FORMATS_SVG|DWRITE_GLYPH_IMAGE_FORMATS_PNG|DWRITE_GLYPH_IMAGE_FORMATS_JPEG|DWRITE_GLYPH_IMAGE_FORMATS_TIFF|DWRITE_GLYPH_IMAGE_FORMATS_PREMULTIPLIED_B8G8R8A8);
+        ComPtr<IDWriteColorGlyphRunEnumerator1> layers;
+        HRESULT hr=colorWrite->TranslateColorGlyphRun(D2D1::Point2F(x,y),run,description,formats,mode,nullptr,0,&layers);
+        if(hr==DWRITE_E_NOCOLOR)return Monochrome(x,y,run);
+        if(FAILED(hr))return hr;
+        try {
+            ComPtr<ID2D1SolidColorBrush> palette;Check(dc->CreateSolidColorBrush(D2D1::ColorF(0,0),&palette));
+            for(;;) {
+                BOOL more=FALSE;Check(layers->MoveNext(&more));if(!more)break;
+                const DWRITE_COLOR_GLYPH_RUN1* layer;Check(layers->GetCurrentRun(&layer));
+                auto origin=D2D1::Point2F(layer->baselineOriginX,layer->baselineOriginY);
+                switch(layer->glyphImageFormat) {
+                case DWRITE_GLYPH_IMAGE_FORMATS_PNG:case DWRITE_GLYPH_IMAGE_FORMATS_JPEG:
+                case DWRITE_GLYPH_IMAGE_FORMATS_TIFF:case DWRITE_GLYPH_IMAGE_FORMATS_PREMULTIPLIED_B8G8R8A8:
+                    colorDc->DrawColorBitmapGlyphRun(layer->glyphImageFormat,origin,&layer->glyphRun,mode);break;
+                case DWRITE_GLYPH_IMAGE_FORMATS_SVG:
+                    colorDc->DrawSvgGlyphRun(origin,&layer->glyphRun,fill,nullptr,0,mode);break;
+                default:
+                    if(layer->paletteIndex==0xffff)Check(Monochrome(origin.x,origin.y,&layer->glyphRun));
+                    else {
+                        palette->SetColor({layer->runColor.r,layer->runColor.g,layer->runColor.b,layer->runColor.a});
+                        // Color layers must not receive the normal text outline:
+                        // outlining each layer obscures the emoji's inner details.
+                        dc->DrawGlyphRun(origin,&layer->glyphRun,palette.Get(),mode);
+                    }
+                    break;
+                }
+            }
+            return S_OK;
+        }catch(HRESULT error){return error;}
     }
     HRESULT STDMETHODCALLTYPE DrawUnderline(void*,FLOAT,FLOAT,const DWRITE_UNDERLINE*,IUnknown*) override{return S_OK;}
     HRESULT STDMETHODCALLTYPE DrawStrikethrough(void*,FLOAT,FLOAT,const DWRITE_STRIKETHROUGH*,IUnknown*) override{return S_OK;}
@@ -57,9 +93,11 @@ public:
     ComPtr<ID3D11Device> d3d;ComPtr<ID3D11DeviceContext> immediate;
     ComPtr<IDXGIDevice> dxgi;ComPtr<IDXGIFactory2> dxFactory;
     ComPtr<ID2D1Factory1> factory;ComPtr<ID2D1Device> device;ComPtr<ID2D1DeviceContext> dc;ComPtr<IDWriteFactory> write;
+    ComPtr<IDWriteFactory4> colorWrite;ComPtr<ID2D1DeviceContext4> colorDc;bool colorEmoji=true;
     ComPtr<IDXGISwapChain1> swap;ComPtr<ID2D1Bitmap1> target;ComPtr<ID3D11Texture2D> offscreen;
     ComPtr<IDCompositionDevice> composition;ComPtr<IDCompositionTarget> compositionTarget;ComPtr<IDCompositionVisual> root;
     std::unordered_map<std::wstring,Glyph> cache;std::unordered_map<int,std::wstring> keys;size_t cacheBytes=0;
+    DWRITE_FONT_WEIGHT fontWeight=DWRITE_FONT_WEIGHT_BOLD;
     std::wstring font=L"Yu Gothic UI",adapter;unsigned long long frame=0;UINT width=0,height=0;float opacity=.95f;
     ~Graphics() {
         if(compositionTarget)compositionTarget->SetRoot(nullptr);
@@ -77,6 +115,8 @@ public:
         D2D1_FACTORY_OPTIONS opts{};Check(D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED,opts,factory.GetAddressOf()));
         Check(factory->CreateDevice(dxgi.Get(),&device));Check(device->CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE,&dc));
         Check(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED,__uuidof(IDWriteFactory),reinterpret_cast<IUnknown**>(write.GetAddressOf())));
+        // Optional interfaces: if unavailable, all text follows the mono path.
+        write.As(&colorWrite);dc.As(&colorDc);
         dc->SetDpi(96,96);dc->SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
     }
     void Attach(HWND hwnd) {
@@ -99,7 +139,7 @@ public:
     }
     std::wstring Key(const Sprite& s) {return std::to_wstring(s.size)+L"/"+std::to_wstring(s.color)+L"/"+s.text;}
     Glyph Build(const Sprite& s) {
-        Glyph result;ComPtr<IDWriteTextFormat> format;Check(write->CreateTextFormat(font.c_str(),nullptr,DWRITE_FONT_WEIGHT_BOLD,DWRITE_FONT_STYLE_NORMAL,DWRITE_FONT_STRETCH_NORMAL,s.size,L"ja-JP",&format));
+        Glyph result;ComPtr<IDWriteTextFormat> format;Check(write->CreateTextFormat(font.c_str(),nullptr,fontWeight,DWRITE_FONT_STYLE_NORMAL,DWRITE_FONT_STRETCH_NORMAL,s.size,L"ja-JP",&format));
         Check(format->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP));ComPtr<IDWriteTextLayout> layout;
         Check(write->CreateTextLayout(s.text.c_str(),static_cast<UINT32>(s.text.size()),format.Get(),100000,100000,&layout));
         DWRITE_TEXT_METRICS metrics{};DWRITE_OVERHANG_METRICS over{};Check(layout->GetMetrics(&metrics));Check(layout->GetOverhangMetrics(&over));
@@ -111,7 +151,7 @@ public:
         ComPtr<ID2D1SolidColorBrush> fill,edge;
         Check(dc->CreateSolidColorBrush(D2D1::ColorF((s.color>>16&255)/255.f,(s.color>>8&255)/255.f,(s.color&255)/255.f),&fill));
         Check(dc->CreateSolidColorBrush(D2D1::ColorF((s.color&0xffffff)==0?D2D1::ColorF::White:D2D1::ColorF::Black),&edge));
-        Outline renderer(dc.Get(),factory.Get(),fill.Get(),edge.Get());
+        Outline renderer(dc.Get(),factory.Get(),fill.Get(),edge.Get(),colorEmoji?colorWrite.Get():nullptr,colorEmoji?colorDc.Get():nullptr);
         auto props=D2D1::BitmapProperties1(D2D1_BITMAP_OPTIONS_TARGET,D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM,D2D1_ALPHA_MODE_PREMULTIPLIED));
         for(UINT y=0;y<h;y+=2048)for(UINT x=0;x<w;x+=2048) {
             UINT tw=std::min(2048u,w-x),th=std::min(2048u,h-y);Tile tile;tile.x=x-padX;tile.y=y-padY;tile.w=float(tw);tile.h=float(th);
@@ -166,12 +206,12 @@ public:
             Check(image->WritePixels(height,map.RowPitch,map.RowPitch*height,static_cast<BYTE*>(map.pData)));Check(image->Commit());Check(encoder->Commit());
         } catch(...){immediate->Unmap(read.Get(),0);throw;}immediate->Unmap(read.Get(),0);
     }
-    struct Signature {double center=0;uint64_t alpha=0;int transparent=0,white=0,black=0;};
+    struct Signature {double center=0;uint64_t alpha=0,hash=14695981039346656037ull;int transparent=0,white=0,black=0,colored=0;};
     Signature Inspect() {
         D3D11_TEXTURE2D_DESC desc{};offscreen->GetDesc(&desc);desc.Usage=D3D11_USAGE_STAGING;desc.BindFlags=0;desc.CPUAccessFlags=D3D11_CPU_ACCESS_READ;
         ComPtr<ID3D11Texture2D> read;Check(d3d->CreateTexture2D(&desc,nullptr,&read));immediate->CopyResource(read.Get(),offscreen.Get());D3D11_MAPPED_SUBRESOURCE map{};Check(immediate->Map(read.Get(),0,D3D11_MAP_READ,0,&map));
         Signature s;double moment=0;
-        for(UINT y=0;y<height;y++) {auto p=static_cast<BYTE*>(map.pData)+y*map.RowPitch;for(UINT x=0;x<width;x++,p+=4){s.alpha+=p[3];moment+=double(x)*p[3];if(!p[3])s.transparent++;if(p[3]>250){if(p[0]>250&&p[1]>250&&p[2]>250)s.white++;if(p[0]<5&&p[1]<5&&p[2]<5)s.black++;}}}
+        for(UINT y=0;y<height;y++) {auto p=static_cast<BYTE*>(map.pData)+y*map.RowPitch;for(UINT x=0;x<width;x++,p+=4){s.alpha+=p[3];moment+=double(x)*p[3];for(int c=0;c<4;c++)s.hash=(s.hash^p[c])*1099511628211ull;if(!p[3])s.transparent++;if(p[3]>250){if(p[0]>250&&p[1]>250&&p[2]>250)s.white++;if(p[0]<5&&p[1]<5&&p[2]<5)s.black++;if(std::max({p[0],p[1],p[2]})-std::min({p[0],p[1],p[2]})>25)s.colored++;}}}
         immediate->Unmap(read.Get(),0);s.center=s.alpha?moment/s.alpha:0;return s;
     }
 };
@@ -192,13 +232,13 @@ public:
     inline static std::atomic<int> active=0;
     std::mutex gate;std::condition_variable initialized;std::atomic<bool> stop=false;bool ready=false;HRESULT initError=S_OK;
     HWND player=nullptr;bool enabled=false,moving=false;double stamp=0,lease=0;std::vector<Sprite> scene;Stats stats{};
-    std::wstring font;float opacity;std::thread thread;
-    Renderer(const wchar_t* family,float alpha):font(family),opacity(alpha) {thread=std::thread([this]{Run();});std::unique_lock lock(gate);initialized.wait(lock,[this]{return ready;});active++;}
+    std::wstring font;float opacity;DWRITE_FONT_WEIGHT fontWeight;bool colorEmoji;std::thread thread;
+    Renderer(const wchar_t* family,float alpha,DWRITE_FONT_WEIGHT weight,bool color):font(family),opacity(alpha),fontWeight(weight),colorEmoji(color) {thread=std::thread([this]{Run();});std::unique_lock lock(gate);initialized.wait(lock,[this]{return ready;});active++;}
     ~Renderer(){stop=true;if(thread.joinable())thread.join();active--;}
     void Run() {
         ComScope com;HWND window=nullptr;
         try {
-            Graphics g;g.font=font;g.opacity=opacity;g.Init();
+            Graphics g;g.font=font;g.opacity=opacity;g.fontWeight=fontWeight;g.colorEmoji=colorEmoji;g.Init();
             WNDCLASSW wc{};wc.lpfnWndProc=WindowProc;wc.hInstance=GetModuleHandleW(nullptr);wc.lpszClassName=L"NicoBEGpuOverlay";RegisterClassW(&wc);
             window=CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP|WS_EX_LAYERED|WS_EX_TRANSPARENT|WS_EX_TOOLWINDOW|WS_EX_NOACTIVATE,wc.lpszClassName,L"NicoBE GPU コメント",WS_POPUP,0,0,1,1,nullptr,nullptr,wc.hInstance,nullptr);
             if(!window)throw HRESULT_FROM_WIN32(GetLastError());Check(SetLayeredWindowAttributes(window,0,255,LWA_ALPHA)?S_OK:HRESULT_FROM_WIN32(GetLastError()));g.Attach(window);
@@ -244,10 +284,13 @@ public:
     }
 };
 #define API extern "C" __declspec(dllexport)
-API HRESULT __cdecl NicoCreate(const wchar_t* font,float opacity,Renderer** output) {
-    if(!font||!output)return E_INVALIDARG;*output=nullptr;
-    try {auto r=new Renderer(font,opacity);if(FAILED(r->initError)){HRESULT hr=r->initError;delete r;return hr;}*output=r;return S_OK;}catch(...){return E_FAIL;}
+API HRESULT __cdecl NicoCreateWithOptions(const wchar_t* font,int weight,int colorEmoji,float opacity,Renderer** output) {
+    if(!output)return E_INVALIDARG;*output=nullptr;
+    if(!font||(weight!=400 && weight!=700 && weight!=900))return E_INVALIDARG;
+    try {auto r=new Renderer(font,opacity,static_cast<DWRITE_FONT_WEIGHT>(weight),colorEmoji!=0);if(FAILED(r->initError)){HRESULT hr=r->initError;delete r;return hr;}*output=r;return S_OK;}catch(...){return E_FAIL;}
 }
+API HRESULT __cdecl NicoCreateWithWeight(const wchar_t* font,int weight,float opacity,Renderer** output) {return NicoCreateWithOptions(font,weight,0,opacity,output);}
+API HRESULT __cdecl NicoCreate(const wchar_t* font,float opacity,Renderer** output) {return NicoCreateWithWeight(font,700,opacity,output);}
 API void __cdecl NicoDestroy(Renderer* r){delete r;}
 API int __cdecl NicoActiveRenderers(){return Renderer::active.load();}
 API void __cdecl NicoFollow(Renderer* r,HWND player,int enabled){if(!r)return;std::lock_guard lock(r->gate);r->player=player;r->enabled=enabled!=0;}
@@ -270,6 +313,29 @@ API HRESULT __cdecl NicoValidate(int* checks) {
         g.Draw(items,1,false);if(g.Inspect().alpha==0)throw E_FAIL;(*checks)++;
         items.clear();g.Draw(items,0,false);if(g.Inspect().alpha!=0)throw E_FAIL;(*checks)++;
         g.Resize(1280,720);items.push_back({2,500,100,32,0xffffff,240,-1,L"ここすき 神が怒った"});g.frame++;g.Prepare(items,10000);g.Draw(items,0,true);auto resized=g.Inspect();if(std::abs(resized.center-original.center*2/3)>1)throw E_FAIL;(*checks)++;
+        return S_OK;
+    }catch(HRESULT hr){return hr;}catch(...){return E_FAIL;}
+}
+// Short offscreen regression test; never creates or displays a desktop window.
+API HRESULT __cdecl NicoValidateColorEmoji(const wchar_t* colorPng,const wchar_t* monoPng,int* checks) {
+    if(!checks)return E_POINTER;*checks=0;ComScope com;
+    try {
+        Graphics g;g.Init();g.Resize(1920,1080);g.opacity=1;
+        auto render=[&](bool color,const wchar_t* text) {
+            g.colorEmoji=color;g.cache.clear();g.keys.clear();g.cacheBytes=0;
+            std::vector<Sprite> items{{1,60,60,64,0xffffff,0,-1,text}};
+            g.frame++;g.Prepare(items,10000);g.Draw(items,0,false);return g.Inspect();
+        };
+        const wchar_t* sample=L"日本語 ABC 😀 🎉 👍🏽 ❤️ 1️⃣\n家族 👨‍👩‍👧‍👦 絵文字と通常の文字\n単色の記号 ∑ ∫ → 未対応文字 \U0010ffff";
+        auto colored=render(true,sample);if(colored.colored<100||colored.white==0||colored.black==0)throw E_FAIL;(*checks)++;
+        if(colorPng)g.SavePng(colorPng);
+        auto mono=render(false,sample);if(mono.colored!=0||mono.alpha==0)throw E_FAIL;(*checks)++;
+        if(monoPng)g.SavePng(monoPng);
+        const wchar_t* fallback=L"日本語 ABC ∑ ∫ → \U0010ffff";
+        auto fallbackOn=render(true,fallback),fallbackOff=render(false,fallback);
+        if(fallbackOn.hash!=fallbackOff.hash||fallbackOn.alpha==0)throw E_FAIL;(*checks)++;
+        g.colorWrite.Reset();auto unavailable=render(true,sample);
+        if(unavailable.hash!=mono.hash)throw E_FAIL;(*checks)++;
         return S_OK;
     }catch(HRESULT hr){return hr;}catch(...){return E_FAIL;}
 }

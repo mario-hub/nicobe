@@ -170,7 +170,7 @@ public static class EncoderJob
             try{await errors;}catch(Exception){} // Observe faults even when stdout/progress failed first.
         }
     }
-    public static string ResolveOutputPath(string input,EncoderSettings settings,string? outputFile=null,double? testSeconds=null)
+    public static string ResolveOutputPath(string input,EncoderSettings settings,string? outputFile=null)
     {
         string extension=settings.Container=="MKV"?".mkv":".mp4";
         bool Occupied(string path)=>File.Exists(path)||Directory.Exists(path)
@@ -182,8 +182,7 @@ public static class EncoderJob
             if(Occupied(path))throw new IOException("出力動画または同名ASSが既に存在します: "+path);
             return path;
         }
-        string stem=Path.GetFileNameWithoutExtension(input)+$"_{settings.Codec}_{settings.Backend}_{settings.Width}x{settings.Height}_{settings.FrameRate}fps"+(testSeconds.HasValue?"_sample":"");
-        if(stem.Length>150)stem=stem[..150];
+        string stem=Path.GetFileNameWithoutExtension(input);
         string final=Path.Combine(Path.GetFullPath(settings.OutputFolder),stem+extension);
         for(int i=2;Occupied(final);i++)final=Path.Combine(Path.GetFullPath(settings.OutputFolder),stem+$" ({i})"+extension);
         return final;
@@ -194,7 +193,7 @@ public static class EncoderJob
         bool cpuFallback=await EncoderCapabilities.Resolve(settings,token);
         settings.Validate();input=Path.GetFullPath(input);
         if(!File.Exists(input)||!new[]{".ts",".m2ts",".mts"}.Contains(Path.GetExtension(input).ToLowerInvariant()))throw new Exception("TSファイルを選択してください。");
-        string final=ResolveOutputPath(input,settings,outputFile,testSeconds);
+        string final=ResolveOutputPath(input,settings,outputFile);
         string outputFolder=Path.GetDirectoryName(final)!;Directory.CreateDirectory(outputFolder);
         string stamp=DateTime.Now.ToString("yyyyMMdd-HHmmss")+"-"+Guid.NewGuid().ToString("N")[..8];
         string log=Path.Combine(EncoderPaths.Logs,stamp+".log");
@@ -280,10 +279,10 @@ public static class EncoderJob
             }
             if(settings.Container=="MKV")
             {
-                var selected=(settings.EmbedComments?comments:null)?.Comments.Select(c=>c with {MediaSeconds=c.MediaSeconds+(recording.Start-metadata.PlaybackZeroUtc).TotalSeconds,SizeScale=c.SizeScale*settings.CommentSizePercent/100d})
+                var selected=(settings.EmbedComments?comments:null)?.Comments.Select(c=>c with {MediaSeconds=c.MediaSeconds+(recording.Start-metadata.PlaybackZeroUtc).TotalSeconds})
                     .Where(c=>c.MediaSeconds>=0 && c.MediaSeconds<outputDuration).ToList();
                 progress.Report(new("字幕・同期情報を保存",1,selected==null?"MKVへ録画情報を保存しています":"MKVへASS字幕を埋め込んでいます"));
-                await FinishMkv(partial,settings,metadata,selected,audio,dualMono,token);
+                await FinishMkv(partial,settings,metadata,selected,audio,dualMono,warnings,token);
             }
             else
             {
@@ -305,11 +304,12 @@ public static class EncoderJob
             {
                 progress.Report(new("ASSを保存",1,"動画と同名の外部ASSを作成しています"));
                 double offset=(recording.Start-metadata.PlaybackZeroUtc).TotalSeconds;
-                var selected=comments.Comments.Select(c=>c with {MediaSeconds=c.MediaSeconds+offset,SizeScale=c.SizeScale*settings.CommentSizePercent/100d})
+                var selected=comments.Comments.Select(c=>c with {MediaSeconds=c.MediaSeconds+offset})
                     .Where(c=>c.MediaSeconds>=0 && c.MediaSeconds<outputDuration).ToList();
-                AssComments.Write(partialAss,selected,token,outputDuration);
+                int written=AssComments.Write(partialAss,selected,token,outputDuration,settings.CommentSizePercent);
                 var restored=AssComments.ReadFile(partialAss,token);
-                if(selected.Any(c=>outputDuration-c.MediaSeconds>=.01) && restored.Count==0)throw new IOException("外部ASSコメントの読み戻しに失敗しました。");
+                if(written>0 && restored.Count==0)throw new IOException("外部ASSコメントの読み戻しに失敗しました。");
+                if(written==0){File.Delete(partialAss);warnings.Add("配置できるコメントがないため、外部ASSファイルは作成しませんでした。");}
             }
             token.ThrowIfCancellationRequested();File.Move(partial,final);videoPublished=true;
             if(File.Exists(partialAss)){File.Move(partialAss,finalAss);assPublished=true;}
@@ -363,20 +363,22 @@ public static class EncoderJob
             }
         }
     }
-    static async Task FinishMkv(string partial,EncoderSettings settings,Mp4RecordingMetadata metadata,List<Comment>? comments,IReadOnlyList<int> audio,IReadOnlyDictionary<int,bool> dualMono,CancellationToken token)
+    static async Task FinishMkv(string partial,EncoderSettings settings,Mp4RecordingMetadata metadata,List<Comment>? comments,IReadOnlyList<int> audio,IReadOnlyDictionary<int,bool> dualMono,List<string> warnings,CancellationToken token)
     {
         string ass=Path.Combine(EncoderPaths.Temp,"comments-"+Guid.NewGuid().ToString("N")+".ass");
         string muxed=partial+".mux.mkv";
         try
         {
             var args=new List<string>{"-v","error","-nostdin","-n","-copyts","-i",partial};
+            bool hasAss=false;
             if(comments!=null)
             {
-                AssComments.Write(ass,comments,token,metadata.DurationSeconds);
-                args.AddRange(new[]{"-i",ass});
+                hasAss=AssComments.Write(ass,comments,token,metadata.DurationSeconds,settings.CommentSizePercent)>0;
+                if(hasAss)args.AddRange(new[]{"-i",ass});
+                else warnings.Add("配置できるコメントがないため、MKVにASS字幕を格納しませんでした。");
             }
             args.AddRange(new[]{"-map","0","-map_metadata","-1","-c","copy","-avoid_negative_ts","disabled"});
-            if(comments!=null)args.AddRange(new[]{"-map","1:0","-c:s","ass","-metadata:s:s:0","title="+ContainerComments.TrackTitle,"-metadata:s:s:0","language=jpn","-disposition:s:0","0"});
+            if(hasAss)args.AddRange(new[]{"-map","1:0","-c:s","ass","-metadata:s:s:0","title="+ContainerComments.TrackTitle,"-metadata:s:s:0","language=jpn","-disposition:s:0","0"});
             args.AddRange(new[]{"-metadata",ContainerComments.MetadataTag+"="+JsonSerializer.Serialize(metadata),muxed});
             await Capture(settings.Ffmpeg,args,token);
             using var probe=await Probe(settings.Ffprobe,muxed,token);
@@ -385,7 +387,7 @@ public static class EncoderJob
             int video=probe.RootElement.GetProperty("streams").EnumerateArray().First(s=>s.GetProperty("codec_type").GetString()=="video").GetProperty("index").GetInt32();
             double first=await FirstFrame(settings.Ffprobe,muxed,video,token);
             if(Math.Abs(first-metadata.OutputFirstVideoPts)>.002)throw new IOException("MKV字幕追加後の映像時刻が変化しました。");
-            if(comments is {Count:>0})
+            if(hasAss)
             {
                 string restored=await Capture(settings.Ffmpeg,new[]{"-v","error","-nostdin","-copyts","-i",muxed,"-map","0:s:0","-f","ass","pipe:1"},token);
                 var expected=AssComments.ReadFile(ass,token);

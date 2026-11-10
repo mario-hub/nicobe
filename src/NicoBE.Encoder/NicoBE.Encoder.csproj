@@ -15,6 +15,7 @@
     <Compile Include="..\NicoBE\Mp4CommentData.cs" Link="Mp4CommentData.cs"/>
     <Compile Include="..\NicoBE\LogReader.cs" Link="LogReader.cs"/>
     <Compile Include="..\NicoBE\AssComments.cs" Link="AssComments.cs"/>
+    <Compile Include="..\NicoBE\CommentMotion.cs" Link="CommentMotion.cs"/>
     <Compile Include="..\NicoBE\ContainerComments.cs" Link="ContainerComments.cs"/>
     <Compile Include="..\NicoBE\FfmpegInstaller.cs" Link="FfmpegInstaller.cs"/>
     <Compile Include="..\NicoBE\FfmpegDownloadWindow.cs" Link="FfmpegDownloadWindow.cs"/>

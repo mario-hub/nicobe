@@ -35,8 +35,14 @@ internal static class CliTest
             var directory=CliRequest.Parse(new[]{input,namedDirectory,"--settings",profile}).Prepare();
             Check(directory.OutputFile==null && directory.Settings.OutputFolder==namedDirectory,"existing directory with movie suffix");
             string generated=EncoderJob.ResolveOutputPath(input,prepared.Settings);
+            Check(Path.GetFileName(generated)=="入力.mp4","automatic output only changes extension");
+            Check(Path.GetFileName(EncoderJob.ResolveOutputPath(input,explicitFile.Settings))=="入力.mkv","MKV keeps source name");
+            string longName=new string('あ',160)+".ts";
+            Check(Path.GetFileName(EncoderJob.ResolveOutputPath(Path.Combine(root,longName),prepared.Settings))==Path.ChangeExtension(longName,".mp4"),"long source names are not truncated");
             Directory.CreateDirectory(prepared.Settings.OutputFolder);File.WriteAllText(generated,"existing video");
-            Check(EncoderJob.ResolveOutputPath(input,prepared.Settings)!=generated,"automatic name must use suffix");
+            Check(Path.GetFileName(EncoderJob.ResolveOutputPath(input,prepared.Settings))=="入力 (2).mp4","only collisions add a sequence number");
+            File.WriteAllText(Path.Combine(prepared.Settings.OutputFolder,"入力 (2).ass"),"existing ASS");
+            Check(Path.GetFileName(EncoderJob.ResolveOutputPath(input,prepared.Settings))=="入力 (3).mp4","sidecar collision uses the same sequence number");
             File.WriteAllText(named,"existing video");
             Reject(()=>CliRequest.Parse(new[]{input,named,"--settings",profile}).Prepare(),"must refuse existing explicit video");
             string assOutput=Path.Combine(root,"with-ass.mp4");File.WriteAllText(Path.ChangeExtension(assOutput,".ass"),"existing ASS");

@@ -18,6 +18,7 @@ if (Test-Path -LiteralPath (Join-Path $root 'assets\nicobe.ico') -PathType Leaf)
 $packages = @(
     @{
         Name = 'NicoBE-win-x64'
+        VersionFile = 'version.txt'
         BuildFolder = 'app'
         IncludeMkv = $true
         Binaries = @(
@@ -27,6 +28,7 @@ $packages = @(
     },
     @{
         Name = 'NicoBE-Encoder-win-x64'
+        VersionFile = 'version_encoder.txt'
         BuildFolder = 'app-encoder'
         Binaries = @(
             'NicoBE.Encoder.exe', 'NicoBE.Encoder.dll',
@@ -81,7 +83,7 @@ try {
                 foreach ($relativePath in $commonFiles) {
                     $files[$relativePath] = Join-Path $root $relativePath
                 }
-                $files['version.txt'] = Join-Path $root 'release\version.txt'
+                $files[$package.VersionFile] = Join-Path (Join-Path $root 'release') $package.VersionFile
                 $buildFolder = Join-Path $stageRoot $package.BuildFolder
                 foreach ($binary in $package.Binaries) {
                     $files[$binary] = Join-Path $buildFolder $binary

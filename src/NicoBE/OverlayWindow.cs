@@ -12,6 +12,8 @@ public sealed class OverlayWindow
     readonly Config config;
     Typeface typeface;
     string renderedFont;
+    int renderedWeight;
+    bool renderedColorEmoji;
     readonly Dictionary<(string,double),(double Width,double Height)> widths=new();
     nint renderer;
     int nextId;
@@ -19,25 +21,25 @@ public sealed class OverlayWindow
     public OverlayWindow(CommentEngine engine,Config config)
     {
         this.engine=engine;this.config=config;
-        renderedFont=config.FontFamily;
-        typeface=new Typeface(new FontFamily(config.FontFamily),FontStyles.Normal,FontWeights.Bold,FontStretches.Normal);
-        int hr=GpuNative.NicoCreate(config.FontFamily,(float)config.Opacity,out renderer);
+        renderedFont=config.FontFamily;renderedWeight=config.FontWeight;renderedColorEmoji=config.ColorEmoji;
+        typeface=new Typeface(new FontFamily(config.FontFamily),FontStyles.Normal,FontWeight.FromOpenTypeWeight(config.FontWeight),FontStretches.Normal);
+        int hr=GpuNative.NicoCreateWithOptions(config.FontFamily,config.FontWeight,config.ColorEmoji?1:0,(float)config.Opacity,out renderer);
         if(hr<0)throw new Exception($"GPU描画を初期化できません (0x{hr:X8})。Direct3D 11のハードウェア描画が必要です。");
         engine.Measure=Measure;
         TraceLog.Write("GPU hardware renderer: "+GetStats().Adapter+"; target=60 FPS");
     }
     public void RefreshFont()
     {
-        if(string.Equals(renderedFont,config.FontFamily,StringComparison.OrdinalIgnoreCase))return;
+        if(string.Equals(renderedFont,config.FontFamily,StringComparison.OrdinalIgnoreCase) && renderedWeight==config.FontWeight && renderedColorEmoji==config.ColorEmoji)return;
         RecreateRenderer();
     }
     internal void RecreateRenderer()
     {
-        var updated=new Typeface(new FontFamily(config.FontFamily),FontStyles.Normal,FontWeights.Bold,FontStretches.Normal);
-        int hr=GpuNative.NicoCreate(config.FontFamily,(float)config.Opacity,out var replacement);
+        var updated=new Typeface(new FontFamily(config.FontFamily),FontStyles.Normal,FontWeight.FromOpenTypeWeight(config.FontWeight),FontStretches.Normal);
+        int hr=GpuNative.NicoCreateWithOptions(config.FontFamily,config.FontWeight,config.ColorEmoji?1:0,(float)config.Opacity,out var replacement);
         if(hr<0)throw new Exception($"GPU描画を初期化できません (0x{hr:X8})。");
         if(renderer!=0)GpuNative.NicoDestroy(renderer);
-        renderer=replacement;typeface=updated;renderedFont=config.FontFamily;widths.Clear();
+        renderer=replacement;typeface=updated;renderedFont=config.FontFamily;renderedWeight=config.FontWeight;renderedColorEmoji=config.ColorEmoji;widths.Clear();
     }
     (double Width,double Height,object? Visual) Measure(Comment comment)
     {
@@ -60,7 +62,7 @@ public sealed class OverlayWindow
             var a=engine.Active[i];var c=a.Comment;
             items[i]=new() {Id=((TextId)a.Visual!).Value,X=(float)engine.X(a),Y=(float)engine.Y(a),Size=(float)(config.FontSize*c.SizeScale),
                 Color=uint.Parse(c.Color.AsSpan(1),NumberStyles.HexNumber,CultureInfo.InvariantCulture),
-                Velocity=c.Position==CommentPosition.Scroll?(float)config.ScrollPixelsPerSecond:0,
+                Velocity=(float)a.Velocity,
                 Remaining=c.Position==CommentPosition.Scroll?-1:(float)Math.Max(0,config.FixedCommentSeconds-(engine.MotionSeconds-a.Born)),Text=c.Text};
         }
         GpuNative.NicoSubmit(renderer,items,items.Length,engine.Playing?1:0,Math.Clamp(lease,0,.65));
@@ -84,11 +86,14 @@ public static class GpuNative
     [StructLayout(LayoutKind.Sequential,CharSet=CharSet.Unicode)]
     public struct Benchmark {public double GpuMeanMs,GpuP95Ms,CpuMeanMs,ColdMs,PacedFps;public int Count,Width,Height,Frames;[MarshalAs(UnmanagedType.ByValTStr,SizeConst=128)]public string Adapter;}
     [DllImport(Library,CallingConvention=CallingConvention.Cdecl,CharSet=CharSet.Unicode)]public static extern int NicoCreate(string font,float opacity,out nint renderer);
+    [DllImport(Library,CallingConvention=CallingConvention.Cdecl,CharSet=CharSet.Unicode)]public static extern int NicoCreateWithWeight(string font,int weight,float opacity,out nint renderer);
+    [DllImport(Library,CallingConvention=CallingConvention.Cdecl,CharSet=CharSet.Unicode)]public static extern int NicoCreateWithOptions(string font,int weight,int colorEmoji,float opacity,out nint renderer);
     [DllImport(Library,CallingConvention=CallingConvention.Cdecl)]public static extern void NicoDestroy(nint renderer);
     [DllImport(Library,CallingConvention=CallingConvention.Cdecl)]public static extern void NicoFollow(nint renderer,nint player,int enabled);
     [DllImport(Library,CallingConvention=CallingConvention.Cdecl)]public static extern void NicoSubmit(nint renderer,[In,MarshalAs(UnmanagedType.LPArray,SizeParamIndex=2)]Item[] items,int count,int moving,double lease);
     [DllImport(Library,CallingConvention=CallingConvention.Cdecl)]public static extern void NicoStats(nint renderer,out Stats stats);
     [DllImport(Library,CallingConvention=CallingConvention.Cdecl)]public static extern int NicoValidate(out int checks);
+    [DllImport(Library,CallingConvention=CallingConvention.Cdecl,CharSet=CharSet.Unicode)]static extern int NicoValidateColorEmoji(string colorPng,string monoPng,out int checks);
     [DllImport(Library,CallingConvention=CallingConvention.Cdecl,CharSet=CharSet.Unicode)]public static extern int NicoBEnchmark(int count,int width,int height,out Benchmark result,string? png);
     internal static int RunRecoveryTest()
     {
@@ -102,6 +107,23 @@ public static class GpuNative
         finally{overlay.Close();}
         if(NicoActiveRenderers()!=before)throw new Exception("GPU renderer was not released.");
         Paths.WriteJson("gpu-recovery-test.json",new{passed=true,hiddenRendererReplacement=true,deviceLossInjected=false});return 0;
+    }
+    internal static int RunEmojiTest()
+    {
+        int before=NicoActiveRenderers();var config=new Config();var engine=new CommentEngine(config);
+        var overlay=new OverlayWindow(engine,config);
+        try
+        {
+            config.ColorEmoji=false;overlay.RefreshFont();overlay.Redraw();
+            config.ColorEmoji=true;overlay.RefreshFont();overlay.Redraw();
+            if(NicoActiveRenderers()!=before+1 || overlay.GetStats().Error!=0)throw new Exception("Color emoji toggle failed or leaked a renderer.");
+        }
+        finally{overlay.Close();}
+        int basic=NicoValidate(out int basicChecks);
+        int emoji=NicoValidateColorEmoji(System.IO.Path.Combine(Paths.Logs,"emoji-color.png"),System.IO.Path.Combine(Paths.Logs,"emoji-mono.png"),out int emojiChecks);
+        bool passed=basic>=0 && emoji>=0 && NicoActiveRenderers()==before;
+        Paths.WriteJson("emoji-test.json",new{passed,basicChecks,emojiChecks,basicError=$"0x{basic:X8}",emojiError=$"0x{emoji:X8}",kind="Hardware GPU offscreen; live playback not tested"});
+        return passed?0:1;
     }
     public static int RunBenchmark()
     {

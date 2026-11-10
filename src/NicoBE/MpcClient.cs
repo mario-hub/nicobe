@@ -10,7 +10,7 @@ namespace NicoBE;
 
 public sealed class MpcClient : IDisposable
 {
-    public const uint SubtitleTracks=0x50000004, GetSubtitleTracks=0xa0003000, SetSubtitleTrack=0xa0002005;
+    public const uint SubtitleTracks=0x50000004, GetSubtitleTracks=0xa0003000, SetSubtitleTrack=0xa0002005, JumpSeconds=0xa0003005;
     public const uint Connect=0x50000000, State=0x50000001, PlayMode=0x50000002, NowPlaying=0x50000003,
         Playlist=0x50000006, Position=0x50000007, Seek=0x50000008, End=0x50000009, Disconnect=0x5000000b;
     public const uint OpenFile=0xa0000000, PlayPause=0xa0000003, Play=0xa0000004, Pause=0xa0000005,
@@ -21,6 +21,8 @@ public sealed class MpcClient : IDisposable
     private readonly Stopwatch clock=Stopwatch.StartNew();
     private double lastReply,lastAttach=double.NegativeInfinity,lastWatch=double.NegativeInfinity;
     bool disposed;
+    readonly SemaphoreSlim controlGate=new(1,1);
+    readonly CancellationTokenSource controlsLifetime=new();
     public nint PlayerWindow { get; private set; }
     public bool Connected => PlayerWindow != 0 && Native.IsWindow(PlayerWindow);
     public int? PlayerProcessId => process is { HasExited:false } ? process.Id : null;
@@ -60,6 +62,26 @@ public sealed class MpcClient : IDisposable
             return Native.SendMessageTimeout(PlayerWindow,Native.WM_COPYDATA,source.Handle,ref data,2,150,out _)!=0;
         }
         finally {Marshal.FreeHGlobal(ptr);}
+    }
+    public async Task<bool> SendControlAsync(uint command,string text)
+    {
+        if(disposed || !Connected || command is not (SetSpeed or JumpSeconds))return false;
+        nint target=PlayerWindow,from=source.Handle;
+        Native.GetWindowThreadProcessId(target,out uint pid);
+        var token=controlsLifetime.Token;
+        try
+        {
+            await controlGate.WaitAsync(token);
+            try
+            {
+                if(disposed || token.IsCancellationRequested || PlayerWindow!=target)return false;
+                // User operations can initialize filters and take longer than a
+                // position query. Keep the UI dispatcher available for API callbacks.
+                return await Task.Run(()=>MpcControlTransport.Send(target,from,pid,command,text),token);
+            }
+            finally{controlGate.Release();}
+        }
+        catch(OperationCanceledException){return false;}
     }
     public static byte[] CommandLinePacket(params string[] args)
     {
@@ -107,7 +129,7 @@ public sealed class MpcClient : IDisposable
         if(Connected)SendCommandLine(PlayerWindow,"/slave","0");
         PlayerWindow=0;
     }
-    public void Dispose() {if(disposed)return;disposed=true;Detach();source.RemoveHook(Hook);process?.Dispose();}
+    public void Dispose() {if(disposed)return;disposed=true;controlsLifetime.Cancel();Detach();source.RemoveHook(Hook);process?.Dispose();}
 
     public static string[] SplitFields(string value)
     {

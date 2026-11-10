@@ -12,13 +12,19 @@ public sealed class SettingsWindow : Window
     readonly Config original;
     readonly IStartupRegistration startup;
     readonly Action<Config> apply;
-    readonly bool originalStartup;
+    readonly Action<Config>? persist;
+    bool originalStartup;
     readonly NgSettingsPanel ng;
     readonly TextBox logPath=new() {Height=36};
     readonly ComboBox preference=new() {Height=36,ItemsSource=new[]{"オリジナル優先","ASS優先"}};
     readonly ComboBox font=new() {FontSize=16,MaxDropDownHeight=320,IsTextSearchEnabled=true,Height=36};
     sealed record FontChoice(string Source,string Label);
+    sealed record WeightChoice(int Value,string Label);
+    readonly ComboBox weight=new() {Height=36,DisplayMemberPath=nameof(WeightChoice.Label),SelectedValuePath=nameof(WeightChoice.Value),ItemsSource=new[]{new WeightChoice(400,"細い"),new WeightChoice(700,"標準"),new WeightChoice(900,"太い")}};
     readonly CheckBox autostart=new() {Content="オフ",FontSize=16};
+    readonly CheckBox accelerateLongComments=new() {Content="オン",FontSize=16};
+    readonly CheckBox colorEmoji=new() {Content="オン",FontSize=16};
+    readonly CheckBox playbackPanelVisible=new() {Content="オン",FontSize=16};
     readonly CheckBox commentsVisible=new() {Content="表示",FontSize=16};
     readonly Slider size=new(),spacing=new(),speed=new(),advance=new();
     readonly TextBlock error=new() {FontSize=14,TextWrapping=TextWrapping.Wrap,Visibility=Visibility.Collapsed,Margin=new Thickness(0,8,0,0)};
@@ -26,9 +32,9 @@ public sealed class SettingsWindow : Window
     readonly TabItem diagnosticsTab=new() {Header="診断"};
     readonly TextBox diagnosticsText=new() {IsReadOnly=true,AcceptsReturn=true,TextWrapping=TextWrapping.Wrap,VerticalScrollBarVisibility=ScrollBarVisibility.Auto,VerticalContentAlignment=VerticalAlignment.Top,Padding=new Thickness(10),FontSize=16};
     internal void ShowDiagnostics()=>Tabs.SelectedItem=diagnosticsTab;
-    public SettingsWindow(Config current,Action<Config> apply,IStartupRegistration? startup=null,Func<NgLogSnapshot?>? readNgLog=null,Func<string>? readDiagnostics=null)
+    public SettingsWindow(Config current,Action<Config> apply,IStartupRegistration? startup=null,Func<NgLogSnapshot?>? readNgLog=null,Func<string>? readDiagnostics=null,Action<Config>? persist=null)
     {
-        original=current.Clone();this.apply=apply;this.startup=startup??new WindowsStartupRegistration();
+        original=current.Clone();this.apply=apply;this.persist=persist;this.startup=startup??new WindowsStartupRegistration();
         originalStartup=string.Equals(this.startup.Read(),SettingsCommit.StartupCommand,StringComparison.OrdinalIgnoreCase);
         Title="NicoBE — 設定";Width=800;Height=Math.Min(760,SystemParameters.WorkArea.Height-40);MinWidth=720;MinHeight=600;WindowStartupLocation=WindowStartupLocation.CenterScreen;
         FontFamily=new FontFamily("Yu Gothic UI");FontSize=16;Icon=AppAssets.WindowIcon;
@@ -39,9 +45,10 @@ public sealed class SettingsWindow : Window
         var actions=new DockPanel();footer.Child=actions;
         var buttons=new StackPanel {Orientation=Orientation.Horizontal};DockPanel.SetDock(buttons,Dock.Right);actions.Children.Add(buttons);
         var cancel=new Button {Content="キャンセル",MinWidth=108,Margin=new Thickness(0,0,10,0),IsCancel=true};cancel.Click+=(_,_)=>Close();buttons.Children.Add(cancel);
-        var save=new Button {Content="保存して反映",MinWidth=140,IsDefault=true};save.SetResourceReference(StyleProperty,"PrimaryButton");save.Click+=(_,_)=>Save();buttons.Children.Add(save);
-        var reset=new Button {Content="初期値に戻す",HorizontalAlignment=HorizontalAlignment.Left,ToolTip="文字サイズ・行間・文字速度・時間調整を初期値に戻します。"};
-        reset.Click+=(_,_)=>{size.Value=100;spacing.Value=Config.DefaultLineSpacingPercent;speed.Value=100;advance.Value=0;};actions.Children.Add(reset);
+        var applyButton=new Button {Content="反映",MinWidth=92,Margin=new Thickness(0,0,10,0),ToolTip="設定を保存して反映します。設定画面は開いたままにします。"};applyButton.Click+=(_,_)=>Apply(false);buttons.Children.Add(applyButton);
+        var save=new Button {Content="反映して閉じる",MinWidth=140,IsDefault=true};save.SetResourceReference(StyleProperty,"PrimaryButton");save.Click+=(_,_)=>Apply(true);buttons.Children.Add(save);
+        var reset=new Button {Content="初期値に戻す",HorizontalAlignment=HorizontalAlignment.Left,ToolTip="文字の太さ・文字サイズ・行間・文字速度・長文加速・カラー絵文字・時間調整を初期値に戻します。"};
+        reset.Click+=(_,_)=>{accelerateLongComments.IsChecked=true;colorEmoji.IsChecked=true;weight.SelectedValue=700;size.Value=100;spacing.Value=Config.DefaultLineSpacingPercent;speed.Value=Config.DefaultScrollSpeedPercent;advance.Value=0;};actions.Children.Add(reset);
         DockPanel.SetDock(error,Dock.Bottom);outer.Children.Add(error);outer.Children.Add(Tabs);
         var body=new StackPanel {Margin=new Thickness(0,0,6,0)};
         var scroll=new ScrollViewer {Content=body,VerticalScrollBarVisibility=ScrollBarVisibility.Auto,HorizontalScrollBarVisibility=ScrollBarVisibility.Disabled};
@@ -59,14 +66,29 @@ public sealed class SettingsWindow : Window
             if(!ReferenceEquals(e.Source,Tabs))return;
             reset.Visibility=ngTab.IsSelected || licenseTab.IsSelected || diagnosticsTab.IsSelected?Visibility.Hidden:Visibility.Visible;
             save.Visibility=licenseTab.IsSelected || diagnosticsTab.IsSelected?Visibility.Collapsed:Visibility.Visible;
+            applyButton.Visibility=save.Visibility;
             cancel.Content=licenseTab.IsSelected || diagnosticsTab.IsSelected?"閉じる":"キャンセル";
             if(ngTab.IsSelected)ng.Capture();
             if(diagnosticsTab.IsSelected)RefreshDiagnostics();
         };
-        if(!current.SetupCompleted)body.Children.Add(Note("最初にNicoJKのログフォルダを確認してください。"));
+        if(!current.SetupCompleted)body.Children.Add(new Border {
+            BorderBrush=SettingsTheme.Accent,BorderThickness=new Thickness(1),CornerRadius=new CornerRadius(5),
+            Background=new SolidColorBrush(Color.FromRgb(32,47,54)),Padding=new Thickness(12),Margin=new Thickness(0,0,0,12),
+            Child=new TextBlock {Text="NicoJKのログパスを指定してください。\n例：C:\\TvTest\\Plugins\\NicoJK\n「jk4」などのフォルダを含む場所を選択します。",FontSize=16,TextWrapping=TextWrapping.Wrap}});
         commentsVisible.Checked+=(_,_)=>commentsVisible.Content="表示";commentsVisible.Unchecked+=(_,_)=>commentsVisible.Content="非表示";
         SetCommentsVisible(current.CommentsVisible);
         body.Children.Add(Row("コメントを表示",commentsVisible,"接続中のすべてのプレイヤーに適用します。"));
+        autostart.Checked+=(_,_)=>autostart.Content="オン";autostart.Unchecked+=(_,_)=>autostart.Content="オフ";autostart.IsChecked=originalStartup;
+        body.Children.Add(Row("Windows起動時に常駐",autostart,"オンにして保存すると、サインイン時に自動起動します。"));
+        accelerateLongComments.Checked+=(_,_)=>accelerateLongComments.Content="オン";accelerateLongComments.Unchecked+=(_,_)=>accelerateLongComments.Content="オフ";
+        accelerateLongComments.IsChecked=current.AccelerateLongComments;
+        body.Children.Add(Row("長文コメントを加速",accelerateLongComments,"1文字につき2％加速、最大100％増（2倍）。初期値はオンです。"));
+        colorEmoji.Checked+=(_,_)=>colorEmoji.Content="オン";colorEmoji.Unchecked+=(_,_)=>colorEmoji.Content="オフ";
+        colorEmoji.IsChecked=current.ColorEmoji;
+        body.Children.Add(Row("カラー絵文字",colorEmoji,"Windows対応の絵文字をカラー表示します。非対応の文字は単色表示。初期値はオンです。"));
+        playbackPanelVisible.Checked+=(_,_)=>playbackPanelVisible.Content="オン";playbackPanelVisible.Unchecked+=(_,_)=>playbackPanelVisible.Content="オフ";
+        playbackPanelVisible.IsChecked=current.PlaybackPanelVisible;
+        body.Children.Add(Row("操作パネルを表示",playbackPanelVisible,"映像の左下で秒送り・倍速を操作できます。初期値はオンです。"));
         var pathRow=new DockPanel();var browse=new Button {Content="参照",Margin=new Thickness(10,0,0,0)};
         browse.Click+=(_,_)=>
         {
@@ -77,12 +99,12 @@ public sealed class SettingsWindow : Window
         body.Children.Add(Row("NicoJK ログパス",pathRow,"jk4などを含むフォルダ。埋め込みコメントやASSのみの場合は指定不要です。"));
         preference.SelectedIndex=current.CommentPreference=="ASS"?1:0;
         body.Children.Add(Row("コメントの優先形式",preference,"MP4のオリジナルと外部ASSがある場合の優先順です。"));
-        autostart.Checked+=(_,_)=>autostart.Content="オン";autostart.Unchecked+=(_,_)=>autostart.Content="オフ";autostart.IsChecked=originalStartup;
-        body.Children.Add(Row("Windows起動時に常駐",autostart,"オンにして保存すると、サインイン時に自動起動します。"));
+        weight.SelectedValue=current.FontWeight;
         body.Children.Add(Row("フォント",FontField(current.FontFamily),"コメントに使用するフォントと表示例です。"));
+        body.Children.Add(Row("文字の太さ",weight,"細い：400　標準：700　太い：900（対応フォントのみ）"));
         body.Children.Add(SliderField("文字サイズ",size,50,300,5,current.FontSizePercent,v=>$"{v:0} %","100％が標準の文字サイズです。"));
-        body.Children.Add(SliderField("行間",spacing,0,200,5,current.LineSpacingPercent,v=>$"{v:0} %","行と行の余白を調整します。初期値60％です。"));
-        body.Children.Add(SliderField("文字速度",speed,25,300,5,current.ScrollSpeedPercent,v=>$"{v:0} %","動画の再生倍率とは独立して調整できます。"));
+        body.Children.Add(SliderField("文字速度",speed,Config.MinScrollSpeedPercent,300,5,current.ScrollSpeedPercent,v=>$"{v:0} %","動画の再生倍率とは独立して調整できます。"));
+        body.Children.Add(SliderField("行間",spacing,0,100,5,current.LineSpacingPercent,v=>$"{v:0} %","行と行の余白を調整します。初期値30％です。"));
         body.Children.Add(SliderField("時間調整",advance,-10,10,.1,current.AdvanceSeconds,v=>$"{v:+0.0;-0.0;0.0} 秒","−10秒：遅く表示　0秒：調整なし　＋10秒：早く表示"));
     }
     static TextBlock Note(string text)=>new() {Text=text,FontSize=14,Foreground=SettingsTheme.Muted,TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,4,0,0)};
@@ -104,7 +126,8 @@ public sealed class SettingsWindow : Window
             .DistinctBy(f=>f.Source,StringComparer.OrdinalIgnoreCase).OrderBy(f=>f.Label,StringComparer.CurrentCulture).ToList();
         if(!choices.Any(f=>f.Source.Equals(current,StringComparison.OrdinalIgnoreCase)))choices.Insert(0,new(current,current));
         font.ItemsSource=choices;font.DisplayMemberPath=nameof(FontChoice.Label);font.SelectedValuePath=nameof(FontChoice.Source);
-        var sample=new TextBlock {Text="あいうえお ABC 123",FontSize=18,FontWeight=FontWeights.Bold,VerticalAlignment=VerticalAlignment.Center,TextTrimming=TextTrimming.CharacterEllipsis};
+        var sample=new TextBlock {Text="あいうえお ABC 123",FontSize=18,FontWeight=FontWeight.FromOpenTypeWeight((int)weight.SelectedValue),VerticalAlignment=VerticalAlignment.Center,TextTrimming=TextTrimming.CharacterEllipsis};
+        weight.SelectionChanged+=(_,_)=>{if(weight.SelectedValue is int value)sample.FontWeight=FontWeight.FromOpenTypeWeight(value);};
         font.SelectionChanged+=(_,_)=>{if(font.SelectedItem is FontChoice choice)sample.FontFamily=new FontFamily(choice.Source);};
         font.SelectedItem=choices.First(f=>f.Source.Equals(current,StringComparison.OrdinalIgnoreCase));
         var row=new Grid();row.ColumnDefinitions.Add(new ColumnDefinition());row.ColumnDefinitions.Add(new ColumnDefinition {Width=new GridLength(190)});
@@ -128,18 +151,27 @@ public sealed class SettingsWindow : Window
         number.LostKeyboardFocus+=(_,_)=>Commit();number.PreviewKeyDown+=(_,e)=>{if(e.Key==Key.Enter){Commit();e.Handled=true;}};
         return Row(label,row,note);
     }
-    void Save()
+    internal void Apply(bool close)
     {
         try
         {
             Keyboard.ClearFocus();
             var candidate=original.Clone();candidate.NicoJkLogFolder=logPath.Text.Trim().Trim('"');
             candidate.FontFamily=((FontChoice)font.SelectedItem).Source;
+            candidate.FontWeight=(int)weight.SelectedValue;
+            candidate.AccelerateLongComments=accelerateLongComments.IsChecked==true;
+            candidate.ColorEmoji=colorEmoji.IsChecked==true;
+            candidate.PlaybackPanelVisible=playbackPanelVisible.IsChecked==true;
             candidate.CommentsVisible=commentsVisible.IsChecked==true;
             candidate.CommentPreference=preference.SelectedIndex==1?"ASS":"Original";
             candidate.FontSizePercent=size.Value;candidate.LineSpacingPercent=spacing.Value;candidate.ScrollSpeedPercent=speed.Value;candidate.AdvanceSeconds=advance.Value;
             ng.SaveTo(candidate);
-            SettingsCommit.Save(candidate,autostart.IsChecked==true,originalStartup,startup);apply(candidate);Close();
+            candidate.Validate(false);
+            SettingsCommit.Save(candidate,autostart.IsChecked==true,originalStartup,startup,persist);
+            original.CopyFrom(candidate);originalStartup=autostart.IsChecked==true;
+            apply(candidate);
+            error.Visibility=Visibility.Collapsed;
+            if(close)Close();
         }
         catch(Exception ex){error.Text=ex.Message;error.Visibility=Visibility.Visible;}
     }

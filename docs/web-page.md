@@ -8,9 +8,11 @@
 
 ## リリース時のHTML生成
 
-`release/create-release.bat` は `tools/create-release-page.ps1` を呼び、バージョン・公開日・GA4設定を組み込んだ `index.html` をZIPと同じ出力先へ保存する。バージョンと日付は `release/version.txt` の `NicoBE`／`NicoBE Encoder` と、それぞれの `Date` 行で管理する。不正・欠落・重複した定義はエラーにする。
+`release/create-release.bat` は `tools/create-release-page.ps1` を呼び、バージョン・公開日・更新履歴・GA4設定を組み込んだ `index.html` をZIPと同じ出力先へ保存する。NicoBEは `release/version.txt`、EncoderのGUI／CLIは `release/version_encoder.txt` を参照する。`## major.minor.patch (yyyy-MM-dd)` と更新内容の箇条書きを、新しい順にすべて記載する。先頭のバージョン・日付をアプリ名の右側に、各ファイルの全履歴をダウンロードボタンの下に表示する。バージョン・日付を見出し、更新内容を箇条書きに整え、Markdownの記号は表示しない。本文と順序は維持する。履歴は約8行分の固定高の枠でスクロールでき、キーボードでも操作できる。PCではカードの高さとボタン・履歴枠の位置をそろえる。更新内容はHTMLエスケープしてプレーンテキストで出力する。日付・書式の不正、バージョン重複、並び順や更新内容の欠落はエラーにする。
 
 HTMLのみ生成する場合は `tools/create-release-page.ps1 -OutputPath <既存の出力フォルダ内のHTMLパス>` を使用する。テンプレートは上書きしない。`NICOBE_PAGE_PATH` に生成したHTMLの絶対パスを指定すると、表示検証の対象を変更できる。
+
+`tools/test-release-history.ps1` は履歴の読み取り、アプリごとの分離、スクロール枠・見出しと箇条書き・本文の保持、HTMLエスケープ、不正入力を確認する。ZIPは作成しない。
 
 ## 関連ツールと説明の範囲
 

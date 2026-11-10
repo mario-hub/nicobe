@@ -19,15 +19,16 @@ public static class SelfTest
         try
         {
             StorageLayoutTest.Verify(Check);
+            CommentSpeedTest.Verify(Check);
             foreach(double rate in new[]{.5,1,1.5,2,3})
             {
-                var e=new CommentEngine(new());
+                var e=new CommentEngine(new() {AccelerateLongComments=false});
                 e.SetComments(new[]{new Comment(.01,"速度テスト","#FFFFFF",1,CommentPosition.Scroll)});
                 e.OnPosition(0,0);e.SetPlaying(true,0);
                 for(int i=1;i<=10;i++)e.OnPosition(i*.02*rate,i*.02);
                 var a=e.Active.Single();double x=e.X(a);
                 for(int i=11;i<=60;i++)e.OnPosition(i*.02*rate,i*.02);
-                Check(Math.Abs((x-e.X(a))-288)<.001,$"constant scroll at {rate}x");
+                Check(Math.Abs((x-e.X(a))-new Config().ScrollPixelsPerSecond)<.001,$"constant scroll at {rate}x");
                 e.SetPlaying(false,1.2);double frozen=e.X(a);
                 e.OnPosition(1.2*rate,2.2);Check(Math.Abs(e.X(a)-frozen)<.001,$"pause at {rate}x");
                 e.OnSeek(.1,2.2);Check(e.Active.All(item=>!ReferenceEquals(item,a)) && e.Active.Count==1,$"seek reconstructs comments at {rate}x");
@@ -52,12 +53,12 @@ public static class SelfTest
             var opening=new[]{0d,1d,2d,4d}.Select(t=>new Comment(t,t.ToString(),"#FFFFFF",1,CommentPosition.Scroll)).ToArray();
             foreach(bool loadFirst in new[]{false,true})
             {
-                var initial=new CommentEngine(new());initial.Measure=_=>(100,40,null);
+                var initial=new CommentEngine(new() {AccelerateLongComments=false});initial.Measure=_=>(100,40,null);
                 if(loadFirst)initial.SetComments(opening);
                 initial.SetPlaying(true,0);initial.OnPosition(2.5,0);
                 if(!loadFirst)initial.SetComments(opening);
                 Check(initial.Active.Select(a=>a.Comment.MediaSeconds).SequenceEqual(new[]{0d,1d,2d}),$"initial history restored with loadFirst={loadFirst}");
-                Check(Math.Abs(initial.X(initial.Active[0])-(1920-2.5*288))<.001,"initial history has aged screen positions");
+                Check(Math.Abs(initial.X(initial.Active[0])-(1920-2.5*new Config().ScrollPixelsPerSecond))<.001,"initial history has aged screen positions");
                 initial.OnPosition(2.5,.1);
                 Check(initial.Active.Count==3,"initial history is not duplicated by position updates");
                 initial.OnPosition(4,.2);
@@ -81,7 +82,7 @@ public static class SelfTest
             var delayed=new CommentEngine(new());delayed.OnPosition(0,0);delayed.SetPlaying(true,0);
             delayed.Tick(.4);Check(Math.Abs(delayed.MotionSeconds-.4)<.0001,"GPU clock does not rewind after delayed UI tick");
             delayed.Tick(1);Check(Math.Abs(delayed.MotionSeconds-.65)<.0001,"GPU clock freezes when API lease expires");
-            var seek=new CommentEngine(new() {ScrollPixelsPerSecond=240});seek.Measure=c=>(600,40,null);
+            var seek=new CommentEngine(new() {ScrollPixelsPerSecond=240,AccelerateLongComments=false});seek.Measure=c=>(600,40,null);
             seek.SetComments(new[]{89d,90d,91d,95d,99d,100d,101d}.Select(t=>new Comment(t,t.ToString(),"#FFFFFF",1,CommentPosition.Scroll)).ToArray());
             seek.OnSeek(100,0);
             Check(seek.Active.Count==5 && seek.Active.Min(a=>a.Comment.MediaSeconds)==90 && seek.Active.Max(a=>a.Comment.MediaSeconds)==100,"seek includes preceding ten seconds only");
