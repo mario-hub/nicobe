@@ -46,6 +46,14 @@ internal sealed record CliRequest(string Input,string? Output,string? Settings)
                 if(!names.Add(property.Name) || typeof(EncoderSettings).GetProperty(property.Name)==null)
                     throw new ArgumentException("設定ファイルの項目が重複しているか不明です: "+property.Name);
                 if(property.Value.ValueKind==JsonValueKind.Null)throw new ArgumentException("設定値をnullにはできません: "+property.Name);
+                if(property.Name==nameof(EncoderSettings.AssStyle))
+                {
+                    if(property.Value.ValueKind!=JsonValueKind.Object)throw new ArgumentException("AssStyleはJSONオブジェクトで指定してください。");
+                    var styleNames=new HashSet<string>(StringComparer.Ordinal);
+                    foreach(var item in property.Value.EnumerateObject())
+                        if(!styleNames.Add(item.Name)||typeof(AssStyleSettings).GetProperty(item.Name)==null||item.Value.ValueKind==JsonValueKind.Null)
+                            throw new ArgumentException("ASS書式の項目が重複しているか不正です: "+item.Name);
+                }
             }
             settings=EncoderSettings.Load(path);
         }

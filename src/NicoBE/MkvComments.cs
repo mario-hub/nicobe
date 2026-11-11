@@ -12,21 +12,17 @@ public static partial class ContainerComments
     {
         var (recordingTag, subtitleCount, tracks) = MkvReader.Read(path, token);
         var metadata = ParseMetadata(recordingTag);
-        PreparedComments? first = null;
-        foreach (var track in tracks.OrderBy(t => t.Title == TrackTitle ? 0
-                     : t.Title.Contains("NicoJK", StringComparison.OrdinalIgnoreCase) ? 1 : 2))
+        foreach (var track in tracks.OrderBy(t => AssCommentClassifier.TrackPriority(t.Title)))
         {
             token.ThrowIfCancellationRequested();
-            if (track.Document is null) continue;
+            if (track.Document is null || !AssCommentClassifier.IsComment(track.Document.ToString())) continue;
             var comments = AssComments.Read(track.Document.ToString(), token);
             if (comments.Count == 0) continue;
             var names = track.Title.Length == 0 ? Array.Empty<string>() : new[] { track.Title };
             var loaded = FromAss(path, comments, new(names, subtitleCount == 1), metadata);
-            first ??= loaded;
-            if (track.Title == TrackTitle || comments.Any(c => c.Position == CommentPosition.Scroll)) return loaded;
+            return loaded;
         }
-        if (first != null) return first;
-        if (External(path, token) is { } external) return external;
+        if (External(path, token,config.MatchExternalAssPrefix) is { } external) return external;
         if (metadata != null) return LogReader.Prepare(metadata.Recording(path), config, token);
         throw new InvalidDataException("MKVに読み込めるASS字幕またはNicoBEの録画情報がありません。");
     }

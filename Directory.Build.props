@@ -13,6 +13,8 @@
     <FileVersion Condition="'$(NicoBEVersion)' != ''">$(NicoBEVersion).0</FileVersion>
     <InformationalVersion>$(NicoBEVersion)</InformationalVersion>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <!-- Keep developer paths out of PE debug-directory/PDB source references. -->
+    <PathMap>$(MSBuildThisFileDirectory)=/_/</PathMap>
   </PropertyGroup>
   <ItemGroup>
     <AssemblyMetadata Include="ReleaseDate" Value="$(NicoBEReleaseDate)"/>

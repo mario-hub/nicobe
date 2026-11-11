@@ -10,10 +10,10 @@ internal static class CommentMotion
         foreach(string line in text.Split('\r','\n'))
         {
             var elements=StringInfo.GetTextElementEnumerator(line);int count=0;
-            while(count<50 && elements.MoveNext())count++;
+            while(count<CommentDisplayDefaults.AccelerationCharacterLimit && elements.MoveNext())count++;
             longest=Math.Max(longest,count);
-            if(longest==50)break;
+            if(longest==CommentDisplayDefaults.AccelerationCharacterLimit)break;
         }
-        return 1+longest*.02;
+        return 1+longest*CommentDisplayDefaults.AccelerationPerCharacter;
     }
 }

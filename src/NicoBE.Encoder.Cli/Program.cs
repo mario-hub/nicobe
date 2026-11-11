@@ -36,12 +36,12 @@ internal static class Program
         return Run(args).GetAwaiter().GetResult();
     }
 
-    static async Task<int> Run(string[] args)
+    internal static async Task<int> Run(string[] args,CancellationToken token=default)
     {
         (string Input,EncoderSettings Settings,string? OutputFile) request;
         try{request=CliRequest.Parse(args).Prepare();}
         catch(Exception ex){Console.Error.WriteLine("入力・設定エラー: "+ex.Message);Console.Error.WriteLine("使い方は --help を参照してください。");return 2;}
-        using var cancellation=new CancellationTokenSource();
+        using var cancellation=CancellationTokenSource.CreateLinkedTokenSource(token);
         ConsoleCancelEventHandler cancel=(_,e)=>{e.Cancel=true;cancellation.Cancel();};
         Console.CancelKeyPress+=cancel;
         var progress=new ConsoleProgress();

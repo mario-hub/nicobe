@@ -1,7 +1,8 @@
+param([string]$OutputDirectory)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'read-release-history.ps1')
-$work = Join-Path $root 'temp\test-results\release-history-test'
+$work = if($OutputDirectory){[IO.Path]::GetFullPath($OutputDirectory)}else{Join-Path $root 'temp\test-results\release-history-test'}
 New-Item -ItemType Directory -Force -Path $work | Out-Null
 $utf8 = New-Object Text.UTF8Encoding($false)
 $player = Join-Path $work 'version.txt'

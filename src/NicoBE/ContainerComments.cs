@@ -20,6 +20,7 @@ public static partial class ContainerComments
 
     public static Mp4RecordingMetadata? Metadata(JsonElement format) => ParseMetadata(Tag(format, MetadataTag));
 
+    public static Mp4RecordingMetadata? RecordingMetadata(string value)=>ParseMetadata(value);
     static Mp4RecordingMetadata? ParseMetadata(string value)
     {
         if (value.Length == 0) return null;
@@ -29,16 +30,17 @@ public static partial class ContainerComments
         return metadata;
     }
 
-    public static string[] ExternalFiles(string video)
+    public static string[] ExternalFiles(string video, bool matchPrefix = true)
     {
         string stem = Path.GetFileNameWithoutExtension(video);
         string directory = Path.GetDirectoryName(video)!;
-        // Amatsukaze writes variants such as name-nicojk-1080S.ass.
+        // Exact basename first; optional prefix matches are fallback candidates only.
         return Directory.EnumerateFiles(directory, "*.ass")
             .Where(path => Path.GetFileNameWithoutExtension(path).Equals(stem, StringComparison.OrdinalIgnoreCase)
-                || Path.GetFileName(path).StartsWith(stem + ".", StringComparison.OrdinalIgnoreCase)
-                || Path.GetFileName(path).StartsWith(stem + "-nicojk", StringComparison.OrdinalIgnoreCase))
+                || matchPrefix && Path.GetFileNameWithoutExtension(path).StartsWith(stem, StringComparison.OrdinalIgnoreCase))
             .OrderBy(path => Path.GetFileNameWithoutExtension(path).Equals(stem, StringComparison.OrdinalIgnoreCase) ? 0 : 1)
+            .ThenBy(path => Path.GetFileName(path).StartsWith(stem + ".",StringComparison.OrdinalIgnoreCase)
+                || Path.GetFileName(path).StartsWith(stem + "-nicojk",StringComparison.OrdinalIgnoreCase) ? 0 : 1)
             .ThenBy(path => path, StringComparer.OrdinalIgnoreCase).Take(32).ToArray();
     }
 
@@ -50,17 +52,18 @@ public static partial class ContainerComments
         return new(recording, "ASS", comments, 1, 0) { Subtitle = subtitle };
     }
 
-    public static PreparedComments? External(string video, CancellationToken token)
+    public static PreparedComments? External(string video, CancellationToken token, bool matchPrefix = true)
     {
-        PreparedComments? first = null;
-        foreach (string path in ExternalFiles(video))
+        foreach (string path in ExternalFiles(video,matchPrefix))
         {
-            var comments = AssComments.ReadFile(path, token);
+            if(new FileInfo(path).Length>64*1024*1024)continue;
+            string document=File.ReadAllText(path);
+            if(!AssCommentClassifier.IsComment(document))continue;
+            var comments = AssComments.Read(document, token);
             if (comments.Count == 0) continue;
-            var loaded = FromAss(video, comments, new(new[] { Path.GetFileName(path), Path.GetFileNameWithoutExtension(path), "NicoJK" }, false));
-            first ??= loaded;
-            if (comments.Any(c => c.Position == CommentPosition.Scroll)) return loaded;
+            var loaded = FromAss(video, comments, new(new[] { Path.GetFileName(path), Path.GetFileNameWithoutExtension(path) }, false));
+            return loaded;
         }
-        return first;
+        return null;
     }
 }

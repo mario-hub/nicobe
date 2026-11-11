@@ -13,18 +13,22 @@
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
+#include <future>
 #include <mutex>
 #include <string>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+#include "display-timing.h"
 using Microsoft::WRL::ComPtr;
 static void Check(HRESULT hr) { if(FAILED(hr)) throw hr; }
 static double Now() { static double f=[] { LARGE_INTEGER n;QueryPerformanceFrequency(&n);return double(n.QuadPart); }();LARGE_INTEGER n;QueryPerformanceCounter(&n);return n.QuadPart/f; }
 struct Item { int id;float x,y,size;unsigned color;float velocity,remaining;const wchar_t* text; };
 struct Sprite { int id;float x,y,size;unsigned color;float velocity,remaining;std::wstring text; };
 struct Stats { double fps,cpuMs,cacheMs;int visible,pending;unsigned error;int hardware;wchar_t adapter[128]; };
+struct DisplayStats {double refreshHz,targetFps;unsigned divisor;};
+struct PacingStats {double meanMs,p95Ms,maxMs;unsigned busy;int outputSync;};
 struct Bench { double gpuMeanMs,gpuP95Ms,cpuMeanMs,coldMs,pacedFps;int count,width,height,frames;wchar_t adapter[128]; };
 struct ComScope { HRESULT hr=CoInitializeEx(nullptr,COINIT_MULTITHREADED);~ComScope(){if(SUCCEEDED(hr))CoUninitialize();} };
 
@@ -32,9 +36,9 @@ struct ComScope { HRESULT hr=CoInitializeEx(nullptr,COINIT_MULTITHREADED);~ComSc
 // rasterized by Direct2D on the hardware device, once per cached comment.
 class Outline final : public IDWriteTextRenderer {
     ID2D1DeviceContext* dc;ID2D1Factory1* factory;ID2D1Brush* fill;ID2D1Brush* edge;
-    IDWriteFactory4* colorWrite;ID2D1DeviceContext4* colorDc;
+    IDWriteFactory4* colorWrite;ID2D1DeviceContext4* colorDc;float width;bool shadowOnly;
 public:
-    Outline(ID2D1DeviceContext* d,ID2D1Factory1* f,ID2D1Brush* b,ID2D1Brush* e,IDWriteFactory4* w,ID2D1DeviceContext4* c):dc(d),factory(f),fill(b),edge(e),colorWrite(w),colorDc(c){}
+    Outline(ID2D1DeviceContext* d,ID2D1Factory1* f,ID2D1Brush* b,ID2D1Brush* e,IDWriteFactory4* w,ID2D1DeviceContext4* c,float stroke,bool shadow=false):dc(d),factory(f),fill(b),edge(e),colorWrite(w),colorDc(c),width(stroke),shadowOnly(shadow){}
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid,void** p) override {if(!p)return E_POINTER;*p=nullptr;if(iid==__uuidof(IUnknown)||iid==__uuidof(IDWriteTextRenderer)||iid==__uuidof(IDWritePixelSnapping)){*p=this;return S_OK;}return E_NOINTERFACE;}
     ULONG STDMETHODCALLTYPE AddRef() override{return 1;} ULONG STDMETHODCALLTYPE Release() override{return 1;}
     HRESULT STDMETHODCALLTYPE IsPixelSnappingDisabled(void*,BOOL* p) override{*p=TRUE;return S_OK;}
@@ -44,7 +48,7 @@ public:
         try {ComPtr<ID2D1PathGeometry> path;Check(factory->CreatePathGeometry(&path));ComPtr<ID2D1GeometrySink> sink;Check(path->Open(&sink));
             Check(run->fontFace->GetGlyphRunOutline(run->fontEmSize,run->glyphIndices,run->glyphAdvances,run->glyphOffsets,run->glyphCount,run->isSideways,run->bidiLevel%2,sink.Get()));Check(sink->Close());
             D2D1_MATRIX_3X2_F old;dc->GetTransform(&old);dc->SetTransform(D2D1::Matrix3x2F::Translation(x,y)*old);
-            dc->DrawGeometry(path.Get(),edge,2.5f);dc->FillGeometry(path.Get(),fill);dc->SetTransform(old);return S_OK;
+            if(width>0)dc->DrawGeometry(path.Get(),edge,width);dc->FillGeometry(path.Get(),fill);dc->SetTransform(old);return S_OK;
         } catch(HRESULT hr){return hr;}
     }
     HRESULT STDMETHODCALLTYPE DrawGlyphRun(void*,FLOAT x,FLOAT y,DWRITE_MEASURING_MODE mode,const DWRITE_GLYPH_RUN* run,const DWRITE_GLYPH_RUN_DESCRIPTION* description,IUnknown*) override {
@@ -62,6 +66,10 @@ public:
                 BOOL more=FALSE;Check(layers->MoveNext(&more));if(!more)break;
                 const DWRITE_COLOR_GLYPH_RUN1* layer;Check(layers->GetCurrentRun(&layer));
                 auto origin=D2D1::Point2F(layer->baselineOriginX,layer->baselineOriginY);
+                if(shadowOnly) {
+                    if(layer->paletteIndex==0xffff && (layer->glyphImageFormat==DWRITE_GLYPH_IMAGE_FORMATS_TRUETYPE || layer->glyphImageFormat==DWRITE_GLYPH_IMAGE_FORMATS_CFF || layer->glyphImageFormat==DWRITE_GLYPH_IMAGE_FORMATS_COLR))Check(Monochrome(origin.x,origin.y,&layer->glyphRun));
+                    continue;
+                }
                 switch(layer->glyphImageFormat) {
                 case DWRITE_GLYPH_IMAGE_FORMATS_PNG:case DWRITE_GLYPH_IMAGE_FORMATS_JPEG:
                 case DWRITE_GLYPH_IMAGE_FORMATS_TIFF:case DWRITE_GLYPH_IMAGE_FORMATS_PREMULTIPLIED_B8G8R8A8:
@@ -97,7 +105,7 @@ public:
     ComPtr<IDXGISwapChain1> swap;ComPtr<ID2D1Bitmap1> target;ComPtr<ID3D11Texture2D> offscreen;
     ComPtr<IDCompositionDevice> composition;ComPtr<IDCompositionTarget> compositionTarget;ComPtr<IDCompositionVisual> root;
     std::unordered_map<std::wstring,Glyph> cache;std::unordered_map<int,std::wstring> keys;size_t cacheBytes=0;
-    DWRITE_FONT_WEIGHT fontWeight=DWRITE_FONT_WEIGHT_BOLD;
+    DWRITE_FONT_WEIGHT fontWeight=DWRITE_FONT_WEIGHT_BOLD;float outlineWidth=2.5f,shadowOffset=0;
     std::wstring font=L"Yu Gothic UI",adapter;unsigned long long frame=0;UINT width=0,height=0;float opacity=.95f;
     ~Graphics() {
         if(compositionTarget)compositionTarget->SetRoot(nullptr);
@@ -143,20 +151,25 @@ public:
         Check(format->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP));ComPtr<IDWriteTextLayout> layout;
         Check(write->CreateTextLayout(s.text.c_str(),static_cast<UINT32>(s.text.size()),format.Get(),100000,100000,&layout));
         DWRITE_TEXT_METRICS metrics{};DWRITE_OVERHANG_METRICS over{};Check(layout->GetMetrics(&metrics));Check(layout->GetOverhangMetrics(&over));
-        float padX=3+std::max(0.f,over.left),padY=3+std::max(0.f,over.top);
-        UINT w=static_cast<UINT>(std::ceil(metrics.widthIncludingTrailingWhitespace+padX+3+std::max(0.f,over.right)));
-        UINT h=static_cast<UINT>(std::ceil(metrics.height+padY+3+std::max(0.f,over.bottom)));
+        float padding=std::ceil(outlineWidth/2)+2;float padX=padding+std::max(0.f,over.left),padY=padding+std::max(0.f,over.top);
+        UINT w=static_cast<UINT>(std::ceil(metrics.widthIncludingTrailingWhitespace+padX+padding+shadowOffset+std::max(0.f,over.right)));
+        UINT h=static_cast<UINT>(std::ceil(metrics.height+padY+padding+shadowOffset+std::max(0.f,over.bottom)));
         // Bound total texture storage for pathological multi-line comments.
         if(!w||!h||uint64_t(w)*h>16*1024*1024)throw E_INVALIDARG;
-        ComPtr<ID2D1SolidColorBrush> fill,edge;
+        ComPtr<ID2D1SolidColorBrush> fill,edge,shadow;
         Check(dc->CreateSolidColorBrush(D2D1::ColorF((s.color>>16&255)/255.f,(s.color>>8&255)/255.f,(s.color&255)/255.f),&fill));
         Check(dc->CreateSolidColorBrush(D2D1::ColorF((s.color&0xffffff)==0?D2D1::ColorF::White:D2D1::ColorF::Black),&edge));
-        Outline renderer(dc.Get(),factory.Get(),fill.Get(),edge.Get(),colorEmoji?colorWrite.Get():nullptr,colorEmoji?colorDc.Get():nullptr);
+        Check(dc->CreateSolidColorBrush(D2D1::ColorF(0.f,0.f,0.f,.65f),&shadow));
+        Outline shadowRenderer(dc.Get(),factory.Get(),shadow.Get(),shadow.Get(),colorEmoji?colorWrite.Get():nullptr,colorEmoji?colorDc.Get():nullptr,outlineWidth,true);
+        Outline renderer(dc.Get(),factory.Get(),fill.Get(),edge.Get(),colorEmoji?colorWrite.Get():nullptr,colorEmoji?colorDc.Get():nullptr,outlineWidth);
         auto props=D2D1::BitmapProperties1(D2D1_BITMAP_OPTIONS_TARGET,D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM,D2D1_ALPHA_MODE_PREMULTIPLIED));
         for(UINT y=0;y<h;y+=2048)for(UINT x=0;x<w;x+=2048) {
             UINT tw=std::min(2048u,w-x),th=std::min(2048u,h-y);Tile tile;tile.x=x-padX;tile.y=y-padY;tile.w=float(tw);tile.h=float(th);
             Check(dc->CreateBitmap(D2D1::SizeU(tw,th),nullptr,0,&props,&tile.bitmap));dc->SetTarget(tile.bitmap.Get());dc->BeginDraw();dc->SetTransform(D2D1::Matrix3x2F::Identity());dc->Clear(D2D1::ColorF(0,0));
-            HRESULT textResult=layout->Draw(nullptr,&renderer,padX-x,padY-y);HRESULT endResult=dc->EndDraw();dc->SetTarget(target.Get());Check(textResult);Check(endResult);
+            HRESULT textResult=S_OK;
+            // Render all shadows before any foreground glyphs, including fallback font runs.
+            if(shadowOffset>0)textResult=layout->Draw(nullptr,&shadowRenderer,padX-x+shadowOffset,padY-y+shadowOffset);
+            if(SUCCEEDED(textResult))textResult=layout->Draw(nullptr,&renderer,padX-x,padY-y);HRESULT endResult=dc->EndDraw();dc->SetTarget(target.Get());Check(textResult);Check(endResult);
             result.bytes+=size_t(tw)*th*4;result.tiles.push_back(std::move(tile));
         }
         return result;
@@ -206,12 +219,12 @@ public:
             Check(image->WritePixels(height,map.RowPitch,map.RowPitch*height,static_cast<BYTE*>(map.pData)));Check(image->Commit());Check(encoder->Commit());
         } catch(...){immediate->Unmap(read.Get(),0);throw;}immediate->Unmap(read.Get(),0);
     }
-    struct Signature {double center=0;uint64_t alpha=0,hash=14695981039346656037ull;int transparent=0,white=0,black=0,colored=0;};
+    struct Signature {double center=0;uint64_t alpha=0,hash=14695981039346656037ull;int transparent=0,white=0,black=0,colored=0,right=-1,bottom=-1;};
     Signature Inspect() {
         D3D11_TEXTURE2D_DESC desc{};offscreen->GetDesc(&desc);desc.Usage=D3D11_USAGE_STAGING;desc.BindFlags=0;desc.CPUAccessFlags=D3D11_CPU_ACCESS_READ;
         ComPtr<ID3D11Texture2D> read;Check(d3d->CreateTexture2D(&desc,nullptr,&read));immediate->CopyResource(read.Get(),offscreen.Get());D3D11_MAPPED_SUBRESOURCE map{};Check(immediate->Map(read.Get(),0,D3D11_MAP_READ,0,&map));
         Signature s;double moment=0;
-        for(UINT y=0;y<height;y++) {auto p=static_cast<BYTE*>(map.pData)+y*map.RowPitch;for(UINT x=0;x<width;x++,p+=4){s.alpha+=p[3];moment+=double(x)*p[3];for(int c=0;c<4;c++)s.hash=(s.hash^p[c])*1099511628211ull;if(!p[3])s.transparent++;if(p[3]>250){if(p[0]>250&&p[1]>250&&p[2]>250)s.white++;if(p[0]<5&&p[1]<5&&p[2]<5)s.black++;if(std::max({p[0],p[1],p[2]})-std::min({p[0],p[1],p[2]})>25)s.colored++;}}}
+        for(UINT y=0;y<height;y++) {auto p=static_cast<BYTE*>(map.pData)+y*map.RowPitch;for(UINT x=0;x<width;x++,p+=4){s.alpha+=p[3];if(p[3]>10){s.right=std::max(s.right,int(x));s.bottom=std::max(s.bottom,int(y));}moment+=double(x)*p[3];for(int c=0;c<4;c++)s.hash=(s.hash^p[c])*1099511628211ull;if(!p[3])s.transparent++;if(p[3]>250){if(p[0]>250&&p[1]>250&&p[2]>250)s.white++;if(p[0]<5&&p[1]<5&&p[2]<5)s.black++;if(std::max({p[0],p[1],p[2]})-std::min({p[0],p[1],p[2]})>25)s.colored++;}}}
         immediate->Unmap(read.Get(),0);s.center=s.alpha?moment/s.alpha:0;return s;
     }
 };
@@ -223,6 +236,12 @@ public:
     void Until(double deadline){double left=deadline-Now();if(left<=0)return;LARGE_INTEGER due;due.QuadPart=-std::max<LONGLONG>(1,static_cast<LONGLONG>(left*10000000));if(SetWaitableTimer(timer,&due,0,nullptr,nullptr,FALSE))WaitForSingleObject(timer,100);}
 };
 static LRESULT CALLBACK WindowProc(HWND hwnd,UINT message,WPARAM w,LPARAM l) {
+    if(message==WM_NCCREATE)SetWindowLongPtrW(hwnd,GWLP_USERDATA,reinterpret_cast<LONG_PTR>(reinterpret_cast<CREATESTRUCTW*>(l)->lpCreateParams));
+    if(message==WM_DISPLAYCHANGE) {
+        auto timing=reinterpret_cast<DisplayTiming*>(GetWindowLongPtrW(hwnd,GWLP_USERDATA));
+        if(timing)timing->Invalidate();
+    }
+    if(message==WM_NCDESTROY)SetWindowLongPtrW(hwnd,GWLP_USERDATA,0);
     if(message==WM_NCHITTEST)return HTTRANSPARENT;if(message==WM_MOUSEACTIVATE)return MA_NOACTIVATE;
     if(message==WM_ERASEBKGND)return 1;if(message==WM_PAINT){PAINTSTRUCT p;BeginPaint(hwnd,&p);EndPaint(hwnd,&p);return 0;}
     return DefWindowProcW(hwnd,message,w,l);
@@ -232,22 +251,28 @@ public:
     inline static std::atomic<int> active=0;
     std::mutex gate;std::condition_variable initialized;std::atomic<bool> stop=false;bool ready=false;HRESULT initError=S_OK;
     HWND player=nullptr;bool enabled=false,moving=false;double stamp=0,lease=0;std::vector<Sprite> scene;Stats stats{};
-    std::wstring font;float opacity;DWRITE_FONT_WEIGHT fontWeight;bool colorEmoji;std::thread thread;
-    Renderer(const wchar_t* family,float alpha,DWRITE_FONT_WEIGHT weight,bool color):font(family),opacity(alpha),fontWeight(weight),colorEmoji(color) {thread=std::thread([this]{Run();});std::unique_lock lock(gate);initialized.wait(lock,[this]{return ready;});active++;}
+    unsigned visibilityEpoch=0;bool hideRequested=false;
+    DisplayStats displayStats{0,60,1};
+    PacingStats pacingStats{};
+    std::wstring font;float opacity,outlineWidth,shadowOffset;DWRITE_FONT_WEIGHT fontWeight;bool colorEmoji;std::thread thread;
+    Renderer(const wchar_t* family,float alpha,DWRITE_FONT_WEIGHT weight,bool color,float stroke=2.5f,float shadow=0):font(family),opacity(alpha),outlineWidth(stroke),shadowOffset(shadow),fontWeight(weight),colorEmoji(color) {thread=std::thread([this]{Run();});std::unique_lock lock(gate);initialized.wait(lock,[this]{return ready;});active++;}
     ~Renderer(){stop=true;if(thread.joinable())thread.join();active--;}
     void Run() {
-        ComScope com;HWND window=nullptr;
+        ComScope com;HWND window=nullptr;DisplayTiming timing;
         try {
-            Graphics g;g.font=font;g.opacity=opacity;g.fontWeight=fontWeight;g.colorEmoji=colorEmoji;g.Init();
+            Graphics g;g.font=font;g.opacity=opacity;g.fontWeight=fontWeight;g.colorEmoji=colorEmoji;g.outlineWidth=outlineWidth;g.shadowOffset=shadowOffset;g.Init();
             WNDCLASSW wc{};wc.lpfnWndProc=WindowProc;wc.hInstance=GetModuleHandleW(nullptr);wc.lpszClassName=L"NicoBEGpuOverlay";RegisterClassW(&wc);
-            window=CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP|WS_EX_LAYERED|WS_EX_TRANSPARENT|WS_EX_TOOLWINDOW|WS_EX_NOACTIVATE,wc.lpszClassName,L"NicoBE GPU コメント",WS_POPUP,0,0,1,1,nullptr,nullptr,wc.hInstance,nullptr);
+            window=CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP|WS_EX_LAYERED|WS_EX_TRANSPARENT|WS_EX_TOOLWINDOW|WS_EX_NOACTIVATE,wc.lpszClassName,L"NicoBE GPU コメント",WS_POPUP,0,0,1,1,nullptr,nullptr,wc.hInstance,&timing);
             if(!window)throw HRESULT_FROM_WIN32(GetLastError());Check(SetLayeredWindowAttributes(window,0,255,LWA_ALPHA)?S_OK:HRESULT_FROM_WIN32(GetLastError()));g.Attach(window);
             {std::lock_guard lock(gate);stats.hardware=1;wcsncpy_s(stats.adapter,g.adapter.c_str(),_TRUNCATE);ready=true;initialized.notify_one();}
-            Timer timer;double deadline=Now(),sampleStart=deadline;int frames=0;double cpu=0,cacheTime=0;HWND owner=nullptr;RECT previous{};
+            Timer timer;double deadline=Now(),sampleStart=deadline,lastFrame=0;int frames=0,presents=0;unsigned busy=0;double cpu=0,cacheTime=0;HWND owner=nullptr;RECT previous{};
+            ComPtr<IDXGIOutput> syncOutput;std::vector<double> frameIntervals;
+            std::future<DisplaySource> displayRead;HMONITOR readingMonitor=nullptr;unsigned readingRevision=0;
             while(!stop) {
                 MSG message;while(PeekMessageW(&message,nullptr,0,0,PM_REMOVE)){TranslateMessage(&message);DispatchMessageW(&message);}
-                HWND host;bool show,animate;double timestamp,alive;std::vector<Sprite> items;
-                {std::lock_guard lock(gate);host=player;show=enabled;animate=moving;timestamp=stamp;alive=lease;items=scene;}
+                HWND host;bool show,animate,hide;unsigned epoch;double timestamp,alive;std::vector<Sprite> items;
+                {std::lock_guard lock(gate);host=player;show=enabled;animate=moving;timestamp=stamp;alive=lease;items=scene;epoch=visibilityEpoch;hide=hideRequested;hideRequested=false;g.opacity=opacity;}
+                if(hide&&IsWindowVisible(window))ShowWindow(window,SW_HIDE);
                 double now=Now();RECT rect{};POINT point{};HWND video=host?GetDlgItem(host,59648):nullptr;
                 show=show && now-timestamp<2 && host && IsWindow(host) && IsWindowVisible(host) && !IsIconic(host) && video && GetClientRect(video,&rect) && rect.right>20 && rect.bottom>20 && ClientToScreen(video,&point);
                 int pending=0;
@@ -257,7 +282,7 @@ public:
                     bool first=!IsWindowVisible(window),moved=!EqualRect(&previous,&rect);
                     bool raise=GetForegroundWindow()==host && GetWindow(host,GW_HWNDPREV)!=window;
                     if(first||moved||raise) {
-                        UINT flags=SWP_NOACTIVATE|SWP_NOOWNERZORDER|SWP_SHOWWINDOW;
+                        UINT flags=SWP_NOACTIVATE|SWP_NOOWNERZORDER;
                         // A tray click leaves focus outside the player. Restore the
                         // overlay just above its owner even without foreground focus,
                         // while leaving unrelated foreground windows above both.
@@ -265,18 +290,70 @@ public:
                         if((!first&&!raise)||after==window)flags|=SWP_NOZORDER;
                         SetWindowPos(window,after?after:HWND_TOP,rect.left,rect.top,rect.right-rect.left,rect.bottom-rect.top,flags);previous=rect;
                     }
-                    g.Resize(rect.right-rect.left,rect.bottom-rect.top);g.frame++;
+                    g.Resize(rect.right-rect.left,rect.bottom-rect.top);
+                    HMONITOR monitor=MonitorFromRect(&rect,MONITOR_DEFAULTTONEAREST);
+                    // QueryDisplayConfig can enter the display driver. Keep that work
+                    // off the animation thread and discard results made stale by a
+                    // monitor move or another display-change notification.
+                    if(displayRead.valid() && displayRead.wait_for(std::chrono::seconds(0))==std::future_status::ready) {
+                        auto source=displayRead.get();RefreshRate rate=source.rate;
+                        if(timing.CanApply(readingMonitor,readingRevision,monitor)) {
+                            if(monitor!=timing.monitor || rate.numerator!=timing.rate.numerator || rate.denominator!=timing.rate.denominator){lastFrame=0;frameIntervals.clear();}
+                            syncOutput=source.output;
+                            timing.Updated(monitor,now,rate);
+                            std::lock_guard lock(gate);displayStats={rate.Hz(),rate.Target(),rate.Divisor()};
+                        }
+                    }
+                    if(!displayRead.valid() && timing.NeedsRefresh(true,first,monitor,now)) {
+                        readingMonitor=monitor;readingRevision=timing.revision;
+                        displayRead=std::async(std::launch::async,[monitor]{try{ComScope com;return ReadDisplaySource(monitor);}catch(...){return DisplaySource{};}});
+                    }
+                    // A composition swap chain's latency event can follow the primary
+                    // display, even on a different output. Wait on this output instead.
+                    if(monitor!=timing.monitor)syncOutput.Reset();
+                    if(syncOutput) {
+                        for(UINT tick=0;tick<timing.rate.Divisor()&&!stop;tick++) {
+                            if(FAILED(syncOutput->WaitForVBlank())){syncOutput.Reset();break;}
+                        }
+                    }
+                    if(stop)break;
+                    {std::lock_guard lock(gate);if(!enabled||player!=host||epoch!=visibilityEpoch)continue;animate=moving;timestamp=stamp;alive=lease;items=scene;}
+                    g.frame++;
                     double began=Now();pending=g.Prepare(items,3.0);cacheTime+=(Now()-began)*1000;
-                    g.Draw(items,std::min(std::max(0.,now-timestamp),alive),animate);
-                    // The compositor synchronizes presentation to the desktop. The
-                    // high-resolution timer caps submissions at 60 Hz even on 144 Hz displays.
-                    Check(g.swap->Present(0,0));cpu+=(Now()-began)*1000;frames++;
-                } else if(IsWindowVisible(window))ShowWindow(window,SW_HIDE);
+                    g.Draw(items,std::min(std::max(0.,Now()-timestamp),alive),animate);
+                    // Do not add another wait tied to the primary display. A busy
+                    // queue drops this submission; the next frame uses current time.
+                    HRESULT presented;
+                    {
+                        std::lock_guard lock(gate);
+                        // A file switch can invalidate a frame while its glyphs
+                        // are being prepared. Never publish that old frame.
+                        if(!enabled||player!=host||epoch!=visibilityEpoch)continue;
+                        presented=g.swap->Present(0,DXGI_PRESENT_DO_NOT_WAIT);
+                    }
+                    if(presented==DXGI_ERROR_WAS_STILL_DRAWING)busy++;
+                    else {
+                        Check(presented);
+                        // A hidden swap chain still contains its previous image.
+                        // Replace it before making the overlay visible again.
+                        {
+                            std::lock_guard lock(gate);
+                            if(!enabled||player!=host||epoch!=visibilityEpoch)continue;
+                            if(!IsWindowVisible(window))ShowWindow(window,SW_SHOWNOACTIVATE);
+                        }
+                        double at=Now();if(lastFrame)frameIntervals.push_back((at-lastFrame)*1000);lastFrame=at;frames++;
+                    }
+                    cpu+=(Now()-began)*1000;presents++;
+                } else {lastFrame=0;if(IsWindowVisible(window))ShowWindow(window,SW_HIDE);}
                 now=Now();if(now-sampleStart>=1) {
-                    std::lock_guard lock(gate);stats.fps=frames/(now-sampleStart);stats.cpuMs=frames?cpu/frames:0;stats.cacheMs=frames?cacheTime/frames:0;stats.visible=static_cast<int>(items.size());stats.pending=pending;
-                    frames=0;cpu=cacheTime=0;sampleStart=now;
+                    double mean=0;for(double span:frameIntervals)mean+=span;
+                    if(!frameIntervals.empty())mean/=frameIntervals.size();std::sort(frameIntervals.begin(),frameIntervals.end());
+                    std::lock_guard lock(gate);stats.fps=frames/(now-sampleStart);stats.cpuMs=presents?cpu/presents:0;stats.cacheMs=presents?cacheTime/presents:0;stats.visible=show?static_cast<int>(items.size()):0;stats.pending=pending;
+                    pacingStats={mean,frameIntervals.empty()?0:frameIntervals[frameIntervals.size()*95/100],frameIntervals.empty()?0:frameIntervals.back(),busy,show&&syncOutput?1:0};
+                    frames=presents=0;busy=0;cpu=cacheTime=0;sampleStart=now;frameIntervals.clear();
                 }
-                deadline+=1./60;if(deadline<now)deadline=now;timer.Until(deadline);
+                if(!show||!syncOutput){deadline+=1./(show?timing.rate.Target():60.);if(deadline<now)deadline=now;timer.Until(deadline);}
+                else deadline=now;
             }
         } catch(HRESULT hr) {std::lock_guard lock(gate);stats.error=static_cast<unsigned>(hr);initError=hr;ready=true;initialized.notify_one();}
           catch(...) {std::lock_guard lock(gate);stats.error=static_cast<unsigned>(E_FAIL);initError=E_FAIL;ready=true;initialized.notify_one();}
@@ -284,22 +361,92 @@ public:
     }
 };
 #define API extern "C" __declspec(dllexport)
-API HRESULT __cdecl NicoCreateWithOptions(const wchar_t* font,int weight,int colorEmoji,float opacity,Renderer** output) {
+API HRESULT __cdecl NicoCreateStyledWithShadow(const wchar_t* font,int weight,int colorEmoji,float opacity,float outlineWidth,float shadowOffset,Renderer** output) {
     if(!output)return E_INVALIDARG;*output=nullptr;
-    if(!font||(weight!=400 && weight!=700 && weight!=900))return E_INVALIDARG;
-    try {auto r=new Renderer(font,opacity,static_cast<DWRITE_FONT_WEIGHT>(weight),colorEmoji!=0);if(FAILED(r->initError)){HRESULT hr=r->initError;delete r;return hr;}*output=r;return S_OK;}catch(...){return E_FAIL;}
+    if(!font||!std::isfinite(outlineWidth)||outlineWidth<0||outlineWidth>8||!std::isfinite(shadowOffset)||shadowOffset<0||shadowOffset>8||(weight!=400 && weight!=700 && weight!=900))return E_INVALIDARG;
+    try {auto r=new Renderer(font,opacity,static_cast<DWRITE_FONT_WEIGHT>(weight),colorEmoji!=0,outlineWidth,shadowOffset);if(FAILED(r->initError)){HRESULT hr=r->initError;delete r;return hr;}*output=r;return S_OK;}catch(...){return E_FAIL;}
 }
+API HRESULT __cdecl NicoCreateStyled(const wchar_t* font,int weight,int colorEmoji,float opacity,float outlineWidth,Renderer** output) {return NicoCreateStyledWithShadow(font,weight,colorEmoji,opacity,outlineWidth,0,output);}
+API HRESULT __cdecl NicoCreateWithOptions(const wchar_t* font,int weight,int colorEmoji,float opacity,Renderer** output) {return NicoCreateStyled(font,weight,colorEmoji,opacity,2.5f,output);}
 API HRESULT __cdecl NicoCreateWithWeight(const wchar_t* font,int weight,float opacity,Renderer** output) {return NicoCreateWithOptions(font,weight,0,opacity,output);}
 API HRESULT __cdecl NicoCreate(const wchar_t* font,float opacity,Renderer** output) {return NicoCreateWithWeight(font,700,opacity,output);}
+API HRESULT __cdecl NicoSetOpacity(Renderer* r,float opacity) {
+    if(!r||!std::isfinite(opacity)||opacity<.1f||opacity>1.f)return E_INVALIDARG;
+    std::lock_guard lock(r->gate);r->opacity=opacity;return S_OK;
+}
+API HRESULT __cdecl NicoValidateOpacity(int* checks) {
+    if(!checks)return E_POINTER;*checks=0;
+    try {
+        ComScope com;Graphics g;g.Init();g.Resize(640,180);
+        std::vector<Sprite> items{{1,100,50,32,0xffffff,0,5,L"不透明度 ABC"}};
+        g.frame++;g.Prepare(items,10000);
+        g.opacity=1;g.Draw(items,0,true);auto full=g.Inspect();if(!full.alpha)throw E_FAIL;(*checks)++;
+        g.opacity=.5f;g.Draw(items,0,true);auto half=g.Inspect();double ratio=double(half.alpha)/full.alpha;
+        if(ratio<.47||ratio>.53)throw E_FAIL;(*checks)++;
+        if(std::abs(half.center-full.center)>.5)throw E_FAIL;(*checks)++;
+        g.opacity=.1f;g.Draw(items,0,true);auto low=g.Inspect();ratio=double(low.alpha)/full.alpha;
+        if(ratio<.08||ratio>.12)throw E_FAIL;(*checks)++;
+        g.opacity=1;g.Draw(items,0,true);if(g.Inspect().hash!=full.hash)throw E_FAIL;(*checks)++;
+        std::unique_ptr<Renderer> r(new Renderer(L"Yu Gothic UI",.95f,DWRITE_FONT_WEIGHT_BOLD,false));
+        Check(r->initError);Check(NicoSetOpacity(r.get(),.6f));
+        {std::lock_guard lock(r->gate);if(r->opacity!=.6f)throw E_FAIL;}(*checks)++;
+        if(SUCCEEDED(NicoSetOpacity(r.get(),0))||SUCCEEDED(NicoSetOpacity(nullptr,.5f)))throw E_FAIL;(*checks)++;
+        return S_OK;
+    } catch(HRESULT hr){return hr;}catch(...){return E_FAIL;}
+}
 API void __cdecl NicoDestroy(Renderer* r){delete r;}
 API int __cdecl NicoActiveRenderers(){return Renderer::active.load();}
-API void __cdecl NicoFollow(Renderer* r,HWND player,int enabled){if(!r)return;std::lock_guard lock(r->gate);r->player=player;r->enabled=enabled!=0;}
+API void __cdecl NicoFollow(Renderer* r,HWND player,int enabled){if(!r)return;std::lock_guard lock(r->gate);if(r->player!=player||(r->enabled&&!enabled)){r->visibilityEpoch++;r->hideRequested=true;}r->player=player;r->enabled=enabled!=0;}
 API void __cdecl NicoSubmit(Renderer* r,const Item* items,int count,int moving,double lease) {
     if(!r||count<0||count>300||(!items&&count))return;
     std::vector<Sprite> scene;scene.reserve(count);for(int i=0;i<count;i++){auto& s=items[i];scene.push_back({s.id,s.x,s.y,s.size,s.color,s.velocity,s.remaining,s.text?s.text:L""});}
     std::lock_guard lock(r->gate);r->scene=std::move(scene);r->stamp=Now();r->moving=moving!=0;r->lease=std::clamp(lease,0.,.65);
 }
 API void __cdecl NicoStats(Renderer* r,Stats* stats){if(!r||!stats)return;std::lock_guard lock(r->gate);*stats=r->stats;}
+API void __cdecl NicoDisplayStats(Renderer* r,DisplayStats* stats){if(!r||!stats)return;std::lock_guard lock(r->gate);*stats=r->displayStats;}
+API void __cdecl NicoPacingStats(Renderer* r,PacingStats* stats){if(!r||!stats)return;std::lock_guard lock(r->gate);*stats=r->pacingStats;}
+API HRESULT __cdecl NicoValidateFrameSync(int* checks) {
+    if(!checks)return E_POINTER;*checks=0;ComScope com;HWND window=nullptr;DisplayTiming timing;
+    try {
+        auto verify=[&](bool ok){if(!ok)throw E_FAIL;(*checks)++;};
+        struct Case {UINT n,d,divisor;double target;};
+        const Case cases[]={{0,0,1,60},{50,1,1,50},{59,1,1,59},{60000,1001,1,60000./1001},
+            {60,1,1,60},{75,1,1,75},{119,1,1,119},{120000,1001,1,120000./1001},
+            {120,1,2,60},{144,1,2,72},{165,1,2,82.5},{180,1,3,60},{240,1,4,60},{300,1,5,60},{360,1,6,60},{480,1,8,60}};
+        for(const auto& c:cases){RefreshRate rate{c.n,c.d};verify(rate.Divisor()==c.divisor && std::abs(rate.Target()-c.target)<.00001);}
+        RefreshRate actual=ReadRefreshRate(MonitorFromPoint(POINT{0,0},MONITOR_DEFAULTTOPRIMARY));
+        verify(actual.Known()&&actual.Target()>0&&actual.Divisor()>=1);
+        auto source=ReadDisplaySource(MonitorFromPoint(POINT{0,0},MONITOR_DEFAULTTOPRIMARY));
+        verify(source.output&&SUCCEEDED(source.output->WaitForVBlank()));
+        auto a=reinterpret_cast<HMONITOR>(1),b=reinterpret_cast<HMONITOR>(2);
+        verify(!timing.NeedsRefresh(false,false,a,0));
+        verify(timing.NeedsRefresh(true,true,a,0));timing.Updated(a,0,{75,1});
+        verify(!timing.NeedsRefresh(true,false,a,4.999)&&timing.NeedsRefresh(true,false,a,5));
+        verify(timing.NeedsRefresh(true,false,b,1));
+        DisplayTiming other;other.Updated(b,0,{144,1});verify(timing.rate.Target()==75&&other.rate.Target()==72);
+        timing.Invalidate();verify(timing.NeedsRefresh(true,false,a,1)&&!timing.NeedsRefresh(false,false,a,6));
+        timing.Updated(a,1,{165,1});verify(timing.rate.Target()==82.5&&other.rate.Target()==72);
+        verify(timing.CanApply(a,timing.revision,a)&&!timing.CanApply(a,timing.revision,b));
+        unsigned oldRevision=timing.revision;timing.Invalidate();verify(!timing.CanApply(a,oldRevision,a));
+        timing.Updated(a,1,{165,1});
+        WNDCLASSW wc{};wc.lpfnWndProc=WindowProc;wc.hInstance=GetModuleHandleW(nullptr);wc.lpszClassName=L"NicoBEFrameSyncTest";RegisterClassW(&wc);
+        window=CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP|WS_EX_TOOLWINDOW|WS_EX_NOACTIVATE,wc.lpszClassName,L"NicoBE frame sync test",WS_POPUP,-32000,-32000,128,72,nullptr,nullptr,wc.hInstance,&timing);
+        if(!window)throw HRESULT_FROM_WIN32(GetLastError());
+        SendMessageW(window,WM_DISPLAYCHANGE,32,MAKELPARAM(1920,1080));
+        verify(timing.dirty&&!other.dirty&&!timing.NeedsRefresh(false,false,a,10));
+        for(int pass=0;pass<2;pass++) {
+            Graphics g;g.Init();g.Attach(window);
+            ComPtr<IDXGIDevice1> device;Check(g.dxgi.As(&device));UINT latency=0;Check(device->GetMaximumFrameLatency(&latency));
+            if(latency!=1)throw E_FAIL;(*checks)++;
+            for(auto size:{128U,256U}) {
+                g.Resize(size,size);DXGI_SWAP_CHAIN_DESC1 desc{};Check(g.swap->GetDesc1(&desc));
+                if(desc.Flags!=0||desc.Width!=size)throw E_FAIL;(*checks)++;
+            }
+            g.Draw({},0,false);Check(g.swap->Present(0,DXGI_PRESENT_DO_NOT_WAIT));(*checks)++;
+        }
+        DestroyWindow(window);return S_OK;
+    }catch(HRESULT hr){if(window)DestroyWindow(window);return hr;}catch(...){if(window)DestroyWindow(window);return E_FAIL;}
+}
 API HRESULT __cdecl NicoValidate(int* checks) {
     if(!checks)return E_POINTER;*checks=0;ComScope com;
     try {
@@ -317,6 +464,43 @@ API HRESULT __cdecl NicoValidate(int* checks) {
     }catch(HRESULT hr){return hr;}catch(...){return E_FAIL;}
 }
 // Short offscreen regression test; never creates or displays a desktop window.
+API HRESULT __cdecl NicoValidateOutline(const wchar_t* png,int* checks) {
+    if(!checks)return E_POINTER;*checks=0;ComScope com;
+    try {
+        Graphics g;g.Init();g.Resize(1920,1080);g.opacity=1;
+        unsigned long long previous=0;
+        for(float width:{0.f,1.5f,2.5f,4.f,6.f,8.f}) {
+            g.outlineWidth=width;g.cache.clear();g.keys.clear();g.cacheBytes=0;
+            std::vector<Sprite> items{{1,20,20,48,0xffffff,0,-1,L"縁取り 日本語 ABC 123"}};
+            g.frame++;g.Prepare(items,10000);g.Draw(items,0,false);auto pixels=g.Inspect();
+            if(pixels.alpha<=previous||pixels.white==0)throw E_FAIL;previous=pixels.alpha;(*checks)++;
+            if(width==4.f&&png)g.SavePng(png);
+        }
+        return S_OK;
+    }catch(HRESULT hr){return hr;}catch(...){return E_FAIL;}
+}
+API HRESULT __cdecl NicoValidateShadow(const wchar_t* png,int* checks) {
+    if(!checks)return E_POINTER;*checks=0;ComScope com;
+    try {
+        Graphics g;g.Init();g.Resize(1920,1080);g.opacity=1;g.outlineWidth=2.5f;
+        Graphics::Signature baseline;
+        for(float offset:{0.f,2.f,3.f,4.f,6.f,8.f}) {
+            g.shadowOffset=offset;g.cache.clear();g.keys.clear();g.cacheBytes=0;
+            std::vector<Sprite> items{{1,60,60,48,0xffffff,0,-1,L"右下の影 日本語 ABC\n複数行の描画"}};
+            g.frame++;g.Prepare(items,10000);g.Draw(items,0,false);auto pixels=g.Inspect();
+            if(offset==0)baseline=pixels;
+            if(!pixels.white||std::abs(pixels.right-baseline.right-offset)>1||std::abs(pixels.bottom-baseline.bottom-offset)>1)throw E_FAIL;
+            if(offset>0 && pixels.alpha<=baseline.alpha)throw E_FAIL;
+            (*checks)++;
+            if(offset==4.f&&png){g.Draw(items,0,false,true);g.SavePng(png);}
+        }
+        // Outline-off keeps the same glyph fill and still supports a shadow.
+        g.outlineWidth=0;g.shadowOffset=4;g.cache.clear();g.keys.clear();g.cacheBytes=0;
+        std::vector<Sprite> plain{{2,60,60,48,0xffffff,0,-1,L"縁取りなし・影あり"}};
+        g.frame++;g.Prepare(plain,10000);g.Draw(plain,0,false);if(!g.Inspect().white)throw E_FAIL;(*checks)++;
+        return S_OK;
+    }catch(HRESULT hr){return hr;}catch(...){return E_FAIL;}
+}
 API HRESULT __cdecl NicoValidateColorEmoji(const wchar_t* colorPng,const wchar_t* monoPng,int* checks) {
     if(!checks)return E_POINTER;*checks=0;ComScope com;
     try {

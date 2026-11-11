@@ -12,7 +12,7 @@ public sealed class OverlayWindow
     readonly Config config;
     Typeface typeface;
     string renderedFont;
-    int renderedWeight;
+    int renderedWeight,renderedOutline,renderedShadow;
     bool renderedColorEmoji;
     readonly Dictionary<(string,double),(double Width,double Height)> widths=new();
     nint renderer;
@@ -21,25 +21,30 @@ public sealed class OverlayWindow
     public OverlayWindow(CommentEngine engine,Config config)
     {
         this.engine=engine;this.config=config;
-        renderedFont=config.FontFamily;renderedWeight=config.FontWeight;renderedColorEmoji=config.ColorEmoji;
+        renderedFont=config.FontFamily;renderedWeight=config.FontWeight;renderedOutline=config.OutlineLevel;renderedShadow=config.ShadowLevel;renderedColorEmoji=config.ColorEmoji;
         typeface=new Typeface(new FontFamily(config.FontFamily),FontStyles.Normal,FontWeight.FromOpenTypeWeight(config.FontWeight),FontStretches.Normal);
-        int hr=GpuNative.NicoCreateWithOptions(config.FontFamily,config.FontWeight,config.ColorEmoji?1:0,(float)config.Opacity,out renderer);
+        int hr=GpuNative.NicoCreateStyledWithShadow(config.FontFamily,config.FontWeight,config.ColorEmoji?1:0,(float)config.Opacity,(float)config.OutlineWidth,(float)config.ShadowOffset,out renderer);
         if(hr<0)throw new Exception($"GPU描画を初期化できません (0x{hr:X8})。Direct3D 11のハードウェア描画が必要です。");
         engine.Measure=Measure;
-        TraceLog.Write("GPU hardware renderer: "+GetStats().Adapter+"; target=60 FPS");
+        TraceLog.Write("GPU hardware renderer: "+GetStats().Adapter+"; target=display refresh / integer divisor; presentation=output-vblank, nonblocking");
     }
     public void RefreshFont()
     {
-        if(string.Equals(renderedFont,config.FontFamily,StringComparison.OrdinalIgnoreCase) && renderedWeight==config.FontWeight && renderedColorEmoji==config.ColorEmoji)return;
+        if(string.Equals(renderedFont,config.FontFamily,StringComparison.OrdinalIgnoreCase) && renderedWeight==config.FontWeight && renderedOutline==config.OutlineLevel && renderedShadow==config.ShadowLevel && renderedColorEmoji==config.ColorEmoji)
+        {
+            // Alpha changes do not invalidate glyphs or restart their movement.
+            if(renderer!=0 && GpuNative.NicoSetOpacity(renderer,(float)config.Opacity)<0)throw new Exception("不透明度を反映できませんでした。");
+            return;
+        }
         RecreateRenderer();
     }
     internal void RecreateRenderer()
     {
         var updated=new Typeface(new FontFamily(config.FontFamily),FontStyles.Normal,FontWeight.FromOpenTypeWeight(config.FontWeight),FontStretches.Normal);
-        int hr=GpuNative.NicoCreateWithOptions(config.FontFamily,config.FontWeight,config.ColorEmoji?1:0,(float)config.Opacity,out var replacement);
+        int hr=GpuNative.NicoCreateStyledWithShadow(config.FontFamily,config.FontWeight,config.ColorEmoji?1:0,(float)config.Opacity,(float)config.OutlineWidth,(float)config.ShadowOffset,out var replacement);
         if(hr<0)throw new Exception($"GPU描画を初期化できません (0x{hr:X8})。");
         if(renderer!=0)GpuNative.NicoDestroy(renderer);
-        renderer=replacement;typeface=updated;renderedFont=config.FontFamily;renderedWeight=config.FontWeight;renderedColorEmoji=config.ColorEmoji;widths.Clear();
+        renderer=replacement;typeface=updated;renderedFont=config.FontFamily;renderedWeight=config.FontWeight;renderedOutline=config.OutlineLevel;renderedShadow=config.ShadowLevel;renderedColorEmoji=config.ColorEmoji;widths.Clear();
     }
     (double Width,double Height,object? Visual) Measure(Comment comment)
     {
@@ -68,6 +73,8 @@ public sealed class OverlayWindow
         GpuNative.NicoSubmit(renderer,items,items.Length,engine.Playing?1:0,Math.Clamp(lease,0,.65));
     }
     public GpuNative.Stats GetStats(){GpuNative.NicoStats(renderer,out var stats);return stats;}
+    public GpuNative.DisplayStats GetDisplayStats(){GpuNative.NicoDisplayStats(renderer,out var stats);return stats;}
+    public GpuNative.PacingStats GetPacingStats(){GpuNative.NicoPacingStats(renderer,out var stats);return stats;}
     public void Close()
     {
         if(renderer!=0){GpuNative.NicoDestroy(renderer);renderer=0;}
@@ -83,17 +90,59 @@ public static class GpuNative
     public struct Item {public int Id;public float X,Y,Size;public uint Color;public float Velocity,Remaining;[MarshalAs(UnmanagedType.LPWStr)]public string Text;}
     [StructLayout(LayoutKind.Sequential,CharSet=CharSet.Unicode)]
     public struct Stats {public double Fps,CpuMs,CacheMs;public int Visible,Pending;public uint Error;public int Hardware;[MarshalAs(UnmanagedType.ByValTStr,SizeConst=128)]public string Adapter;}
+    [StructLayout(LayoutKind.Sequential)]
+    public struct DisplayStats {public double RefreshHz,TargetFps;public uint Divisor;}
+    [StructLayout(LayoutKind.Sequential)]
+    public struct PacingStats {public double MeanMs,P95Ms,MaxMs;public uint Busy;public int OutputSync;}
     [StructLayout(LayoutKind.Sequential,CharSet=CharSet.Unicode)]
     public struct Benchmark {public double GpuMeanMs,GpuP95Ms,CpuMeanMs,ColdMs,PacedFps;public int Count,Width,Height,Frames;[MarshalAs(UnmanagedType.ByValTStr,SizeConst=128)]public string Adapter;}
     [DllImport(Library,CallingConvention=CallingConvention.Cdecl,CharSet=CharSet.Unicode)]public static extern int NicoCreate(string font,float opacity,out nint renderer);
     [DllImport(Library,CallingConvention=CallingConvention.Cdecl,CharSet=CharSet.Unicode)]public static extern int NicoCreateWithWeight(string font,int weight,float opacity,out nint renderer);
     [DllImport(Library,CallingConvention=CallingConvention.Cdecl,CharSet=CharSet.Unicode)]public static extern int NicoCreateWithOptions(string font,int weight,int colorEmoji,float opacity,out nint renderer);
+    [DllImport(Library,CallingConvention=CallingConvention.Cdecl,CharSet=CharSet.Unicode)]public static extern int NicoCreateStyled(string font,int weight,int colorEmoji,float opacity,float outlineWidth,out nint renderer);
+    [DllImport(Library,CallingConvention=CallingConvention.Cdecl,CharSet=CharSet.Unicode)]public static extern int NicoCreateStyledWithShadow(string font,int weight,int colorEmoji,float opacity,float outlineWidth,float shadowOffset,out nint renderer);
     [DllImport(Library,CallingConvention=CallingConvention.Cdecl)]public static extern void NicoDestroy(nint renderer);
+    [DllImport(Library,CallingConvention=CallingConvention.Cdecl)]public static extern int NicoSetOpacity(nint renderer,float opacity);
+    [DllImport(Library,CallingConvention=CallingConvention.Cdecl)]static extern int NicoValidateOpacity(out int checks);
+    internal static int RunOpacityTest()
+    {
+        int hr=NicoValidateOpacity(out int checks);
+        bool passed=hr>=0&&checks==7;
+        Paths.WriteJson("opacity-test.json",new{passed,checks,hresult=hr,kind="Offscreen GPU alpha, position stability and runtime update; no player controlled"});
+        return passed?0:1;
+    }
     [DllImport(Library,CallingConvention=CallingConvention.Cdecl)]public static extern void NicoFollow(nint renderer,nint player,int enabled);
     [DllImport(Library,CallingConvention=CallingConvention.Cdecl)]public static extern void NicoSubmit(nint renderer,[In,MarshalAs(UnmanagedType.LPArray,SizeParamIndex=2)]Item[] items,int count,int moving,double lease);
     [DllImport(Library,CallingConvention=CallingConvention.Cdecl)]public static extern void NicoStats(nint renderer,out Stats stats);
+    [DllImport(Library,CallingConvention=CallingConvention.Cdecl)]public static extern void NicoDisplayStats(nint renderer,out DisplayStats stats);
+    [DllImport(Library,CallingConvention=CallingConvention.Cdecl)]public static extern void NicoPacingStats(nint renderer,out PacingStats stats);
     [DllImport(Library,CallingConvention=CallingConvention.Cdecl)]public static extern int NicoValidate(out int checks);
+    [DllImport(Library,CallingConvention=CallingConvention.Cdecl)]static extern int NicoValidateFrameSync(out int checks);
+    internal static int RunFrameSyncTest()
+    {
+        int hr=NicoValidateFrameSync(out int checks);
+        bool passed=hr>=0&&checks==36;
+        Paths.WriteJson("frame-sync-test.json",new{passed,checks,hresult=$"0x{hr:X8}",kind="Rate/divisor, notification, visible-only polling, independent monitors, output-vblank, hidden composition initialization/resize/recreation; full video playback not tested"});
+        return passed?0:1;
+    }
     [DllImport(Library,CallingConvention=CallingConvention.Cdecl,CharSet=CharSet.Unicode)]static extern int NicoValidateColorEmoji(string colorPng,string monoPng,out int checks);
+    [DllImport(Library,CallingConvention=CallingConvention.Cdecl,CharSet=CharSet.Unicode)]static extern int NicoValidateOutline(string png,out int checks);
+    [DllImport(Library,CallingConvention=CallingConvention.Cdecl,CharSet=CharSet.Unicode)]static extern int NicoValidateShadow(string png,out int checks);
+    internal static int RunOutlineTest()
+    {
+        var config=new Config();var widths=new List<double>();var shadows=new List<double>();
+        var overlay=new OverlayWindow(new CommentEngine(config),config);
+        try
+        {
+            for(int level=0;level<=5;level++){config.OutlineLevel=level;config.Validate(false);overlay.RefreshFont();widths.Add(config.OutlineWidth);}
+            for(int level=0;level<=5;level++){config.ShadowLevel=level;config.Validate(false);overlay.RefreshFont();shadows.Add(config.ShadowOffset);}
+        }
+        finally{overlay.Close();}
+        int hr=NicoValidateOutline(System.IO.Path.Combine(Paths.Logs,"outline-standard.png"),out int checks);
+        int shadowHr=NicoValidateShadow(System.IO.Path.Combine(Paths.Logs,"shadow-standard.png"),out int shadowChecks);
+        bool passed=hr>=0&&checks==6&&shadowHr>=0&&shadowChecks==7;
+        Paths.WriteJson("outline-test.json",new{passed,widths,shadows,checks,shadowChecks,hresult=hr,shadowHr});return passed?0:1;
+    }
     [DllImport(Library,CallingConvention=CallingConvention.Cdecl,CharSet=CharSet.Unicode)]public static extern int NicoBEnchmark(int count,int width,int height,out Benchmark result,string? png);
     internal static int RunRecoveryTest()
     {

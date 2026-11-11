@@ -93,20 +93,48 @@ internal static class PlaybackPanelTest
             var bounds=PlaybackPanelWindow.Bounds(new Rect(-1920,0,1920,1080),new Size(822,153),18);
             Check(bounds.Left==-1902 && bounds.Bottom==1062 && bounds.Width==822,"placement supports negative monitor coordinates and 150 percent DPI");
             var activation=PlaybackPanel.ActivationBounds(new Rect(0,0,1920,1080),1);
-            Check(activation==new Rect(12,964,548,104),"activation area approximates the full two-row panel");
+            Check(activation.Width==PlaybackPanelWindow.PreferredWidth && activation.Height is >=110 and <=125 && activation.Bottom==1068,"activation area includes comment and fetch rows");
             activation=PlaybackPanel.ActivationBounds(new Rect(-1920,0,531,1080),1.5);
-            Check(activation.Width==495 && activation.Height==408 && activation.Left==-1902 && activation.Bottom==1062,"activation area follows wrapping and monitor DPI");
+            Check(activation.Width==495 && activation.Height is >=290 and <=330 && activation.Left==-1902 && activation.Bottom==1062,"activation area follows wrapping and monitor DPI");
+            var commonChanges=new List<(string,bool)>();window.CommonChanged+=(name,on)=>commonChanges.Add((name,on));
+            window.CommentOff.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            window.CommentOn.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Check(commonChanges.SequenceEqual(new[]{("master",false),("master",true)}),"on/off segments send the requested comment visibility");
+            window.SetCommentState(new(true,false,true,false,false,true,false,false,true,false,true,"未取得","テスト",true));
+            Check(!Equals(window.CommentOn.Background,window.CommentOff.Background)&&commonChanges.Count==2,"state refresh highlights on/off without sending another setting change");
+            var switches=(Dictionary<string,CheckBox>)typeof(PlaybackPanelWindow).GetField("commentSwitches",System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic)!.GetValue(window)!;
+            var auto=switches["auto"];
+            window.SetCommentState(new(true,false,false,false,false,false,false,false,false,false,false,"対象外","テスト",false){EmbeddedAvailable=true,Embedded=true});
+            Check(switches["embedded"].IsEnabled&&switches["embedded"].IsChecked==true&&!switches["saved"].IsEnabled,"MP4 container source has independent enabled/checked state");
+            var sourceChanges=new List<(string,bool)>();window.SourceChanged+=(name,on)=>sourceChanges.Add((name,on));
+            typeof(System.Windows.Controls.Primitives.ToggleButton).GetMethod("OnClick",System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic)!.Invoke(switches["embedded"],null);
+            Check(sourceChanges.SequenceEqual(new[]{("embedded",false)}),"MP4 source toggle sends its own source key");
+            window.SetCommentState(new(true,false,false,false,false,false,false,false,false,false,false,"対象外","同期情報なし",false));
+            Check(auto.IsEnabled,"global automatic fetch can be changed even on an ineligible video");
+            typeof(System.Windows.Controls.Primitives.ToggleButton).GetMethod("OnClick",System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic)!.Invoke(auto,null);
+            Check(auto.IsChecked==true&&commonChanges[^1]==("auto",true),"automatic fetch click requests and displays ON");
+            window.SetCommentState(new(true,true,false,false,false,false,false,false,false,false,false,"対象外","同期情報なし",false));
+            Check(auto.IsChecked==true,"ineligible state update does not clear the saved preference");
             void Render(int width,string name)
             {
                 var content=(FrameworkElement)window.Content;content.Measure(new Size(width,double.PositiveInfinity));
                 int height=(int)Math.Ceiling(content.DesiredSize.Height);content.Arrange(new Rect(0,0,width,height));content.UpdateLayout();
+                if(width==PlaybackPanelWindow.PreferredWidth)Check(height<=125&&Math.Abs(window.SettingsButton.TranslatePoint(new Point(),content).Y-window.CommentOn.TranslatePoint(new Point(),content).Y)<3,"normal panel keeps the settings button on the top row and fits three rows");
+                var gearRight=window.SettingsButton.TranslatePoint(new Point(window.SettingsButton.ActualWidth,0),content).X;
+                foreach(var last in new[]{window.JumpButtons[30],window.SpeedButtons[2.5]})
+                {
+                    var group=(FrameworkElement)((FrameworkElement)last.Parent).Parent;
+                    Check(Math.Abs(gearRight-group.TranslatePoint(new Point(group.ActualWidth,0),content).X)<=1.1,"settings button aligns with seek/speed right edge");
+                }
                 foreach(var button in window.SpeedButtons.Values.Concat(window.JumpButtons.Values).Append(window.SettingsButton))
-                {var point=button.TranslatePoint(new Point(),content);if(point.X<0 || point.X+button.ActualWidth>width || button.ActualWidth<60)throw new Exception("Panel button clipped");}
+                {var point=button.TranslatePoint(new Point(),content);if(point.X<0 || point.X+button.ActualWidth>width || button.ActualWidth<(button==window.SettingsButton?28:55))throw new Exception("Panel button clipped");}
                 var bitmap=new RenderTargetBitmap(width,height,96,96,PixelFormats.Pbgra32);bitmap.Render(content);
                 var png=new PngBitmapEncoder();png.Frames.Add(BitmapFrame.Create(bitmap));using var output=File.Create(Path.Combine(Paths.Logs,name));png.Save(output);
                 checks.Add($"{width}px layout has readable unclipped buttons");
             }
-            Render(548,"playback-panel.png");Render(330,"playback-panel-narrow.png");
+            Render((int)PlaybackPanelWindow.PreferredWidth,"playback-panel.png");Render(330,"playback-panel-narrow.png");
+            window.SetCommentState(new(true,false,true,false,false,true,false,false,true,true,false,"取得中","テスト",false));
+            Render((int)PlaybackPanelWindow.PreferredWidth,"playback-panel-fetching.png");
             nint foreground=Native.GetForegroundWindow();
             host=CreateWindowEx(0x08000080,"STATIC","NicoBE panel test",0x90000000,-32000,-32000,1280,720,0,0,0,0);
             Check(host!=0,"off-screen test owner created");

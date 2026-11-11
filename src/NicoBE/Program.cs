@@ -7,8 +7,9 @@ public static class Program
     [STAThread]
     public static int Main(string[] args)
     {
+        if(ReleaseTestEnvironment.Requested)Console.OutputEncoding=new System.Text.UTF8Encoding(false);
         return SafeFileLog.Run(()=>Run(args),ex=>TraceLog.Write("fatal "+ex),
-            ex=>MessageBox.Show("NicoBEを実行できませんでした。\n"+ex.Message+"\n\n保存先: "+Paths.Root+"\n保存先のアクセス権と空き容量を確認してください。","NicoBE",MessageBoxButton.OK,MessageBoxImage.Error));
+            ex=>{if(ReleaseTestEnvironment.Requested){Console.Error.WriteLine(ex);return;}MessageBox.Show("NicoBEを実行できませんでした。\n"+ex.Message+"\n\n保存先: "+Paths.Root+"\n保存先のアクセス権と空き容量を確認してください。","NicoBE",MessageBoxButton.OK,MessageBoxImage.Error);});
     }
     static int Run(string[] args)
     {
@@ -18,15 +19,21 @@ public static class Program
         System.Windows.Media.RenderOptions.ProcessRenderMode=System.Windows.Interop.RenderMode.SoftwareOnly;
         if(args.Contains("--failure-test"))return FailureTest.Run();
         if(args.Contains("--gpu-recovery-test"))return GpuNative.RunRecoveryTest();
+        if(args.Contains("--frame-sync-test"))return GpuNative.RunFrameSyncTest();
         if(args.Contains("--emoji-test"))return GpuNative.RunEmojiTest();
+        if(args.Contains("--outline-test"))return GpuNative.RunOutlineTest();
+        if(args.Contains("--opacity-test"))return GpuNative.RunOpacityTest();
         if(args.Contains("--playback-panel-test"))return PlaybackPanelTest.Run();
         if(args.Contains("--mpc-control-test"))return MpcControlTest.Run();
         if(args.Contains("--storage-test"))return StorageLayoutTest.Run();
         if(args.Contains("--live-test"))return LiveCommentTest.Run();
+        if(args.Contains("--pastlog-test"))return PastLogTest.Run(args.FirstOrDefault(a=>!a.StartsWith("--")));
+        if(args.Contains("--playback-lifecycle-test"))return PlaybackLifecycleTest.Run();
+        if(args.Contains("--scene-continuity-test"))return CommentSceneTest.RunContinuity();
         if(args.Contains("--watcher-test"))return WatcherTest.Run(args.First(a=>!a.StartsWith("--")),args.Contains("--memory-only"));
         if(args.Contains("--self-test")) return SelfTest.Run();
         if(args.Contains("--visibility-test")) return VisibilityTest.Run();
-        if(args.Contains("--ass-test")) return AssPlaybackTest.Run();
+        if(args.Contains("--ass-test")) return AssPlaybackTest.Run(args.FirstOrDefault(a=>!a.StartsWith("--")));
         if(args.Contains("--recording-test"))return SelfTest.ReadRecording(args.First(a=>!a.StartsWith("--")));
         if(args.Contains("--gpu-benchmark")) return GpuNative.RunBenchmark();
         if(args.Contains("--settings-test")) return SettingsTest.Run();

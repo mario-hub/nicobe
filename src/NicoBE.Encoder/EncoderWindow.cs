@@ -39,11 +39,12 @@ public sealed class EncoderWindow : Window
     readonly TextBlock passHelp=Note("");
     readonly CheckBox embed=new() {Content="埋め込む"};
     readonly CheckBox externalAss=new() {Content="外部ASSファイルを保存"};
+    readonly CheckBox pastLogs=new() {Content="過去ログAPIでコメントを補完"};
     readonly TextBox outputFolder=new() {Height=36},logFolder=new() {Height=36};
     FrameworkElement? commentPathRow;
     FrameworkElement? qualityField,bitrateField;
     readonly Slider quality=new() {Minimum=0,Maximum=51,TickFrequency=1,IsSnapToTickEnabled=true,SmallChange=1,LargeChange=5};
-    readonly Slider commentSize=new() {Minimum=50,Maximum=200,Value=100,TickFrequency=5,IsSnapToTickEnabled=true,SmallChange=5,LargeChange=10};
+    readonly AssStylePanel assStyle=new();
     readonly TextBox bitrate=new() {Height=36},ffmpeg=new() {Height=36};
     readonly TextBox status=SelectableText("TSファイルを追加、またはこの画面へドロップしてください。"),detail=SelectableText("");
     readonly TextBox errorText=SelectableText("",new SolidColorBrush(Color.FromRgb(255,171,166)));
@@ -60,20 +61,31 @@ public sealed class EncoderWindow : Window
     readonly TextBox elapsedText=SelectableText("経過時間  00:00:00");
     readonly DispatcherTimer elapsedTimer=new() {Interval=TimeSpan.FromMilliseconds(250)};
     internal TabControl Tabs {get;}=new();
+    readonly Grid layout=new();
+    readonly DockPanel outer=new() {Margin=new Thickness(20)};
+    readonly ScrollViewer basicScroll=new();
+    readonly FrameworkElement ffmpegSection;
+    readonly Action acknowledgeGuide;
+    bool ffmpegGuideAcknowledged;
+    internal FirstRunGuide? Guide {get;private set;}
     CancellationTokenSource? cancellation;
     bool closeAfterStop;
-    public EncoderWindow(string[] files)
+    internal Func<string,EncoderSettings,IProgress<EncodeProgress>,CancellationToken,Task<EncodeResult>> RunJob {get;set;}=
+        (input,settings,progress,token)=>EncoderJob.Run(input,settings,progress,token);
+    public EncoderWindow(string[] files,EncoderSettings? initialSettings=null,Action? acknowledgeGuide=null)
     {
+        this.acknowledgeGuide=acknowledgeGuide??(()=>EncoderSettings.AcknowledgeFfmpegGuide());
         Title="NicoBE Encoder";Width=900;Height=Math.Min(880,SystemParameters.WorkArea.Height-40);MinWidth=800;MinHeight=680;
         WindowStartupLocation=WindowStartupLocation.CenterScreen;FontFamily=new FontFamily("Yu Gothic UI");FontSize=16;AllowDrop=true;SettingsTheme.Apply(this);
         var passStyle=new Style(typeof(ComboBox),(Style)FindResource(typeof(ComboBox)));
         var disabledPass=new Trigger {Property=IsEnabledProperty,Value=false};disabledPass.Setters.Add(new Setter(OpacityProperty,.45));passStyle.Triggers.Add(disabledPass);passes.Style=passStyle;
         ToolTipService.SetShowOnDisabled(passes,true);
         string icon=Path.Combine(Paths.ExecutableDirectory,"assets","nicobe.ico");if(File.Exists(icon))Icon=BitmapFrame.Create(new Uri(icon));
-        var outer=new DockPanel {Margin=new Thickness(20)};Content=outer;
+        Content=layout;layout.Children.Add(outer);
         outer.Children.Add(Tabs);
         var operations=new DockPanel();Tabs.Items.Add(new TabItem {Header="操作",Content=operations});
         Tabs.Items.Add(new TabItem {Header="エンコード設定",Content=SettingsTab(settingsPanel)});
+        Tabs.Items.Add(new TabItem {Header="ASS書式設定",Content=SettingsTab(assStyle)});
         Tabs.Items.Add(new TabItem {Header="基本設定",Content=SettingsTab(basicPanel)});
         Tabs.Items.Add(LicensePanel.Create("NicoBE Encoder"));
         var footer=new StackPanel {Margin=new Thickness(0,12,0,0)};DockPanel.SetDock(footer,Dock.Bottom);operations.Children.Add(footer);
@@ -120,14 +132,10 @@ public sealed class EncoderWindow : Window
         audioNote.Margin=new Thickness(0,4,0,14);sound.Children.Add(audioNote);
         var comments=new StackPanel();embed.Content="コメントデータを格納する";embed.Margin=new Thickness(0,4,0,10);comments.Children.Add(embed);
         externalAss.Margin=new Thickness(0,0,0,6);comments.Children.Add(externalAss);
+        pastLogs.Margin=new Thickness(0,0,0,6);pastLogs.ToolTip="共有キャッシュを使い、不足分をインターネットから取得します。NicoJKログがなくても利用できます。";comments.Children.Add(pastLogs);
         embed.ToolTip="MP4はオリジナル形式、MKVはASS字幕を動画内に保存します。";
         externalAss.ToolTip="動画と同名の.assファイルを同じフォルダに保存します。埋め込みとは独立して選べます。";
-        var sizeRow=new DockPanel {Height=36,Margin=new Thickness(0,4,0,0)};
-        var sizeNumber=new TextBlock {Text="100％",MinWidth=56,TextAlignment=TextAlignment.Right,VerticalAlignment=VerticalAlignment.Center};
-        DockPanel.SetDock(sizeNumber,Dock.Right);sizeRow.Children.Add(sizeNumber);sizeRow.Children.Add(commentSize);
-        commentSize.ValueChanged+=(_,_)=>sizeNumber.Text=commentSize.Value.ToString("0")+"％";
-        commentSize.ToolTip="MKVの埋め込みASS・外部ASSに共通で適用する文字サイズ（50～200％）。MP4の埋め込みコメントには適用しません。";
-        var sizeField=Field("文字サイズ（ASSのみ）",sizeRow);sizeField.Margin=new Thickness(0,12,0,14);comments.Children.Add(sizeField);
+        var assNote=Note("文字サイズなどは「ASS書式設定」で変更できます。");assNote.Margin=new Thickness(0,6,0,14);comments.Children.Add(assNote);
         settingsPanel.Children.Add(Pair(Section("音声",sound),Section("コメント",comments)));
         basicPanel.Children.Add(PathSection("保存先","エンコードした動画を保存するフォルダ。同名のファイルには連番を付けます。",FolderField(outputFolder,"動画の出力先を選択")));
         commentPathRow=FolderField(logFolder,"コメント埋め込み用のNicoJKログフォルダを選択");
@@ -145,11 +153,12 @@ public sealed class EncoderWindow : Window
         {
             var dialog=new OpenFileDialog {Filter="FFmpeg|ffmpeg.exe",Title="ffmpeg.exeを選択"};if(dialog.ShowDialog(this)==true)ffmpeg.Text=dialog.FileName;
         });browse.Margin=new Thickness(10,0,0,0);browse.MinWidth=76;DockPanel.SetDock(browse,Dock.Right);toolRow.Children.Add(browse);toolRow.Children.Add(ffmpeg);
-        basicPanel.Children.Add(PathSection("FFmpeg","ffmpeg.exeを指定します。未導入ならダウンロードで配置・設定できます。",toolRow,download));
+        ffmpegSection=PathSection("FFmpeg","ffmpeg.exeを指定します。未導入ならダウンロードで配置・設定できます。",toolRow,download);basicPanel.Children.Add(ffmpegSection);
         foreach(var pathBox in new[]{outputFolder,logFolder,ffmpeg})
         {pathBox.FontWeight=FontWeights.Normal;pathBox.SetBinding(ToolTipProperty,new Binding(nameof(TextBox.Text)) {Source=pathBox});}
         elapsedTimer.Tick+=(_,_)=>UpdateElapsed();Closed+=(_,_)=>elapsedTimer.Stop();
-        try{LoadSettings(EncoderSettings.Load());}catch(Exception ex){LoadSettings(new());status.Text="前回の設定を読み込めませんでした: "+ex.Message;}
+        try{LoadSettings(initialSettings??EncoderSettings.Load());}catch(Exception ex){LoadSettings(new());status.Text="前回の設定を読み込めませんでした: "+ex.Message;}
+        Loaded+=(_,_)=>Dispatcher.BeginInvoke(()=>{if(IsVisible)ShowFirstRunGuide();},DispatcherPriority.Loaded);
         Loaded+=async (_,_)=>await CheckGpu();
         backend.SelectionChanged+=async (_,_)=>{if(IsLoaded)await CheckGpu();};
         codec.SelectionChanged+=async (_,_)=>{if(IsLoaded)await CheckGpu();};
@@ -159,6 +168,20 @@ public sealed class EncoderWindow : Window
         Closing+=(_,e)=>{if(cancellation!=null){e.Cancel=true;closeAfterStop=true;cancellation.Cancel();status.Text="処理を中止して終了しています…";}};
         AddFiles(files);
     }
+    internal void ShowFirstRunGuide()
+    {
+        if(ffmpegGuideAcknowledged || Guide!=null)return;
+        Tabs.SelectedIndex=3;layout.UpdateLayout();ffmpegSection.BringIntoView();basicScroll.UpdateLayout();
+        Guide=new FirstRunGuide(ffmpegSection,ffmpegSection,()=>
+        {
+            // Acknowledging the guide does not save uncommitted form edits.
+            acknowledgeGuide();ffmpegGuideAcknowledged=true;
+            Guide!.Accept.IsDefault=false;layout.Children.Remove(Guide);Guide.Detach();Guide=null;
+            outer.IsHitTestVisible=true;KeyboardNavigation.SetTabNavigation(outer,KeyboardNavigationMode.Continue);ffmpeg.Focus();
+        },"FFmpegの準備","「ダウンロード」を押すと、自動で導入・設定できます。\nすでにお持ちの場合は、ffmpeg.exeへのパスを入力するか、\n「参照」から選択してください。\n同じフォルダにffprobe.exeも必要です。");
+        outer.IsHitTestVisible=false;KeyboardNavigation.SetTabNavigation(outer,KeyboardNavigationMode.None);
+        layout.Children.Add(Guide);layout.UpdateLayout();Guide.Accept.Focus();
+    }
     void AddFiles(IEnumerable<string> files)
     {
         foreach(string file in files)
@@ -166,16 +189,18 @@ public sealed class EncoderWindow : Window
     }
     void LoadSettings(EncoderSettings s)
     {
+        ffmpegGuideAcknowledged=s.FfmpegGuideAcknowledged;
         ffmpeg.Text=s.Ffmpeg;codec.SelectedValue=s.Codec;backend.SelectedValue=s.Backend;resolution.SelectedValue=s.Width.ToString(CultureInfo.InvariantCulture);
         rate.SelectedValue=s.RateControl;quality.Value=s.Quality;bitrate.Text=s.BitrateMbps.ToString(CultureInfo.CurrentCulture);speed.SelectedValue=s.Speed;deinterlace.SelectedValue=s.Deinterlace;audio.SelectedValue=s.Audio;
         frameRate.SelectedValue=s.FrameRate.ToString(CultureInfo.InvariantCulture);outputFolder.Text=s.OutputFolder;logFolder.Text=s.NicoJkLogFolder;embed.IsChecked=s.EmbedComments;
-        passes.SelectedValue=s.Passes.ToString(CultureInfo.InvariantCulture);container.SelectedValue=s.Container;commentSize.Value=s.CommentSizePercent;externalAss.IsChecked=s.SaveExternalAss;
+        passes.SelectedValue=s.Passes.ToString(CultureInfo.InvariantCulture);container.SelectedValue=s.Container;assStyle.Load(s.AssStyle);externalAss.IsChecked=s.SaveExternalAss;
+        pastLogs.IsChecked=s.UsePastLogComments;
         UpdateQualityRange();UpdateRateControls();UpdateEmbedControls();
     }
     void UpdateEmbedControls()
     {
-        commentSize.IsEnabled=externalAss.IsChecked==true || embed.IsChecked==true && (string?)container.SelectedValue=="MKV";
-        commentSize.Opacity=commentSize.IsEnabled?1:.45;
+        pastLogs.IsEnabled=embed.IsChecked==true || externalAss.IsChecked==true;
+        assStyle.SetAssEnabled(externalAss.IsChecked==true || embed.IsChecked==true && (string?)container.SelectedValue=="MKV");
         if(commentPathRow!=null){commentPathRow.IsEnabled=embed.IsChecked==true || externalAss.IsChecked==true;commentPathRow.Opacity=commentPathRow.IsEnabled?1:.45;}
     }
     async Task CheckGpu()
@@ -242,9 +267,10 @@ public sealed class EncoderWindow : Window
         save.SetResourceReference(StyleProperty,"PrimaryButton");
         save.SetBinding(IsEnabledProperty,new Binding(nameof(IsEnabled)) {Source=start});
         DockPanel.SetDock(save,Dock.Right);footer.Children.Add(save);
-        var message=Note("両タブの設定を保存します。エンコード開始時にも自動保存します。");
+        var message=Note("すべての設定を保存します。エンコード開始時にも自動保存します。");
         message.Margin=new Thickness(0);message.VerticalAlignment=VerticalAlignment.Center;saveMessages.Add(message);footer.Children.Add(message);
-        layout.Children.Add(new ScrollViewer {Content=panel,VerticalScrollBarVisibility=ScrollBarVisibility.Auto,HorizontalScrollBarVisibility=ScrollBarVisibility.Disabled});
+        var scroll=ReferenceEquals(panel,basicPanel)?basicScroll:new ScrollViewer();
+        scroll.Content=panel;scroll.VerticalScrollBarVisibility=ScrollBarVisibility.Auto;scroll.HorizontalScrollBarVisibility=ScrollBarVisibility.Disabled;layout.Children.Add(scroll);
         return layout;
     }
     void SaveSettings()
@@ -266,10 +292,10 @@ public sealed class EncoderWindow : Window
         {if((string?)rate.SelectedValue=="Bitrate")throw new Exception("ビットレートを数値で入力してください。");mbps=1.5;}
         if((string?)rate.SelectedValue=="Quality" && (!double.IsFinite(mbps)||mbps<.5||mbps>100))mbps=1.5;
         int width=int.Parse((string)resolution.SelectedValue,CultureInfo.InvariantCulture);
-        return new() {Ffmpeg=ffmpeg.Text.Trim().Trim('"'),Codec=(string)codec.SelectedValue,Backend=(string)backend.SelectedValue,Width=width,Height=width*9/16,
+        return new() {Ffmpeg=ffmpeg.Text.Trim().Trim('"'),FfmpegGuideAcknowledged=ffmpegGuideAcknowledged,Codec=(string)codec.SelectedValue,Backend=(string)backend.SelectedValue,Width=width,Height=width*9/16,
             RateControl=(string)rate.SelectedValue,Quality=(int)quality.Value,BitrateMbps=mbps,Speed=(string)speed.SelectedValue,Deinterlace=(string)deinterlace.SelectedValue,Audio=(string)audio.SelectedValue,
-            Passes=int.Parse((string)passes.SelectedValue,CultureInfo.InvariantCulture),Container=(string)container.SelectedValue,CommentSizePercent=(int)commentSize.Value,
-            FrameRate=int.Parse((string)frameRate.SelectedValue,CultureInfo.InvariantCulture),OutputFolder=outputFolder.Text.Trim().Trim('"'),NicoJkLogFolder=logFolder.Text.Trim().Trim('"'),EmbedComments=embed.IsChecked==true,SaveExternalAss=externalAss.IsChecked==true};
+            Passes=int.Parse((string)passes.SelectedValue,CultureInfo.InvariantCulture),Container=(string)container.SelectedValue,AssStyle=assStyle.Read(),
+            FrameRate=int.Parse((string)frameRate.SelectedValue,CultureInfo.InvariantCulture),OutputFolder=outputFolder.Text.Trim().Trim('"'),NicoJkLogFolder=logFolder.Text.Trim().Trim('"'),EmbedComments=embed.IsChecked==true,SaveExternalAss=externalAss.IsChecked==true,UsePastLogComments=pastLogs.IsChecked==true};
     }
     async Task Encode()
     {
@@ -278,7 +304,7 @@ public sealed class EncoderWindow : Window
         try
         {
             var pending=queue.Where(q=>q.State!="完了").ToArray();if(pending.Length==0){status.Text="エンコードするTSを追加してください。";return;}
-            var settings=ReadSettings();settings.Validate();cancellation=new();start.IsEnabled=false;cancel.IsEnabled=true;settingsPanel.IsEnabled=false;basicPanel.IsEnabled=false;queueActions.IsEnabled=false;ShowError("");ShowWarnings(warnings);status.Foreground=SettingsTheme.Muted;
+            var settings=ReadSettings();settings.Validate();cancellation=new();start.IsEnabled=false;cancel.IsEnabled=true;settingsPanel.IsEnabled=false;assStyle.IsEnabled=false;basicPanel.IsEnabled=false;queueActions.IsEnabled=false;ShowError("");ShowWarnings(warnings);status.Foreground=SettingsTheme.Muted;
             status.Text="エンコーダーを確認しています…";
             if(await EncoderCapabilities.Resolve(settings,cancellation.Token)){backend.SelectedValue=settings.Backend;passes.SelectedValue=settings.Passes.ToString(CultureInfo.InvariantCulture);quality.Value=settings.Quality;}
             settings.Save();
@@ -291,7 +317,7 @@ public sealed class EncoderWindow : Window
                 var reporter=new Progress<EncodeProgress>(p=>{if(itemFinished)return;item.State=p.Stage;status.Text=$"{Array.IndexOf(pending,item)+1}/{pending.Length}　{p.Stage} — {item.Name}";detail.Text=p.Detail;progress.Value=p.Fraction;});
                 try
                 {
-                    var result=await EncoderJob.Run(item.Path,settings,reporter,cancellation.Token);itemFinished=true;item.State="完了";completed++;queue.Remove(item);detail.Text="保存先: "+result.Output;
+                    var result=await RunJob(item.Path,settings,reporter,cancellation.Token);itemFinished=true;item.State="完了";completed++;queue.Remove(item);detail.Text="保存先: "+result.Output;
                     if(result.Warnings.Count>0)warnings.Add(item.Name+"\n"+string.Join("\n",result.Warnings)+"\n保存先: "+result.Output);
                 }
                 catch(OperationCanceledException ex){item.State="中止";item.Error=ex.Message;ShowError(item.Name+"\n"+ex.Message);break;}
@@ -306,7 +332,7 @@ public sealed class EncoderWindow : Window
         {
             if(warnings.Count>0)ShowWarnings(warnings);
             elapsed.Stop();elapsedTimer.Stop();UpdateElapsed();
-            cancellation?.Dispose();cancellation=null;start.IsEnabled=true;cancel.IsEnabled=false;settingsPanel.IsEnabled=true;basicPanel.IsEnabled=true;queueActions.IsEnabled=true;if(closeAfterStop)Close();
+            cancellation?.Dispose();cancellation=null;start.IsEnabled=true;cancel.IsEnabled=false;settingsPanel.IsEnabled=true;assStyle.IsEnabled=true;basicPanel.IsEnabled=true;queueActions.IsEnabled=true;if(closeAfterStop)Close();
         }
     }
     void ShowError(string text){errorText.Text=text;errorPanel.Visibility=text.Length>0?Visibility.Visible:Visibility.Collapsed;}

@@ -4,12 +4,13 @@ namespace NicoBE;
 
 public static class AssPlaybackTest
 {
-    public static int Run()
+    public static int Run(string? compatibilityFolder=null)
     {
         var checks = new List<string>();
         void Check(bool value, string name) { if (!value) throw new Exception(name); checks.Add(name); }
         try
         {
+            AssCompatibilityTest.Run(Check,compatibilityFolder);
             const string ass = "[Script Info]\nPlayResY: 1080\n[V4+ Styles]\nFormat: Name, Fontsize, PrimaryColour, Alignment\nStyle: Default,38.4,&H00FFFFFF,8\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\nDialogue: 0,0:00:01.25,0:00:07.00,Default,,0,0,0,,{\\move(1920,20,-100,20)\\c&H0000FF&}流れる,コメント\nDialogue: 0,0:00:02.00,0:00:05.00,Default,,0,0,0,,上固定\\N次の行\nDialogue: 0,0:00:03.00,0:00:06.00,Default,,0,0,0,,{\\an2}下固定";
             var comments = AssComments.Read(ass, CancellationToken.None);
             Check(comments.Count == 3 && comments[0].MediaSeconds == 1.25 && comments[0].Text == "流れる,コメント", "ASS timestamps and commas");
@@ -26,6 +27,8 @@ public static class AssPlaybackTest
                 new(4, "下固定コメント", "#FFFFFF", 1, CommentPosition.Bottom)
             };
             AssComments.Write(exported, input, CancellationToken.None);
+            var style=File.ReadLines(exported).First(l=>l.StartsWith("Style:")).Split(',');
+            Check(style[15]=="1"&&style[16]=="1.5"&&style[17]=="2"&&style[6]=="&H6A000000","Export uses thin outline and 90 percent opacity with a translucent bottom-right shadow");
             var roundTrip = AssComments.ReadFile(exported, CancellationToken.None);
             Check(roundTrip.Count == input.Count && input.Zip(roundTrip).All(pair => Math.Abs(pair.First.SizeScale - pair.Second.SizeScale) < .001), "ASS font correction preserves NicoBE sizes");
             var events = File.ReadLines(exported).Where(l => l.StartsWith("Dialogue:")).ToArray();
@@ -35,7 +38,7 @@ public static class AssPlaybackTest
             string clipped = Path.Combine(folder, "clipped.ass");
             AssComments.Write(clipped, input.Take(1).ToArray(), CancellationToken.None, 1);
             Check(File.ReadAllText(clipped).Contains(@"\move(1920,5,1509.6,5)"), "End-of-video clipping preserves 360px per second plus length acceleration");
-            Check(File.ReadAllText(exported).Contains("Yu Gothic UI,63.844,&H0DFFFFFF") && events[0].Contains(@"\fs63.844"),"Export uses default font size and opacity");
+            Check(File.ReadAllText(exported).Contains("Yu Gothic UI,63.844,&H19FFFFFF") && events[0].Contains(@"\fs63.844"),"Export uses default font size and 90 percent opacity");
             string variants=Path.Combine(folder,"variants.ass");
             Comment Chat(double at,string text)=>new(at,text,"#FFFFFF",1,CommentPosition.Scroll);
             AssComments.Write(variants,new[]{Chat(0,"a"),Chat(.8,new string('あ',50))},CancellationToken.None,1.8);
@@ -56,7 +59,8 @@ public static class AssPlaybackTest
             control.Poll(true, 0);control.Receive("Japanese|NicoBE Comments|1");
             Check(sent.Contains((MpcClient.SetSubtitleTrack,"-1")), "Disable selected comment track");
             control.Poll(false, 1);control.Receive("Japanese|NicoBE Comments|-1");
-            Check(sent[^1] == (MpcClient.SetSubtitleTrack,"1"), "Restore original track on hide");
+            Check(!sent.Contains((MpcClient.SetSubtitleTrack,"1")), "Keep commentary off when hidden");
+            control.Restore();Check(sent[^1] == (MpcClient.SetSubtitleTrack,"1"), "Restore original track on release");
             control.Reset();sent.Clear();control.SetSource(new(new[] { "NicoBE Comments" }, false));
             control.Poll(true, 2);control.Receive("Japanese|NicoBE Comments|0");
             Check(!sent.Any(s => s.Command == MpcClient.SetSubtitleTrack), "Leave selected dialogue subtitles enabled");

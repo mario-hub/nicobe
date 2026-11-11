@@ -18,12 +18,14 @@ internal static class CliTest
             File.WriteAllText(Path.Combine(root,"tools","ffmpeg.exe"),"fixture; not an executable");
             File.WriteAllText(Path.Combine(root,"tools","ffprobe.exe"),"fixture; not an executable");
             var settings=new EncoderSettings {Ffmpeg="tools/ffmpeg.exe",OutputFolder="output",Backend="CPU",EmbedComments=false,NicoJkLogFolder="logs"};
+            settings.AssStyle=new(){FontFamily="Arial",FontWeight=900,FontSizePercent=150,ScrollSpeedPercent=125,LineSpacingPercent=25,OutlineLevel=4,ShadowLevel=5,OpacityPercent=80,FixedCommentSeconds=7,AdvanceSeconds=1.5,MaxVisibleComments=90,AccelerateLongComments=false};
             string original=JsonSerializer.Serialize(settings,EncoderSettings.Json);File.WriteAllText(profile,original);
             void Check(bool value,string message){if(!value)throw new Exception(message);}
             void Reject(Action action,string message){bool failed=false;try{action();}catch{failed=true;}Check(failed,message);}
             var parsed=CliRequest.Parse(new[]{input,"--settings",profile});
             var prepared=parsed.Prepare();
             Check(prepared.Input==input && prepared.OutputFile==null,"input / omitted output");
+            Check(JsonSerializer.Serialize(prepared.Settings.AssStyle)==JsonSerializer.Serialize(settings.AssStyle),"CLI preserves all ASS style settings from the profile");
             Check(prepared.Settings.OutputFolder==Path.Combine(root,"output"),"profile-relative output");
             Check(prepared.Settings.Ffmpeg==Path.Combine(root,"tools","ffmpeg.exe"),"profile-relative ffmpeg");
             Check(!Directory.Exists(prepared.Settings.OutputFolder),"validation must not create output");
@@ -57,6 +59,10 @@ internal static class CliTest
             Reject(()=>new CliRequest(input,null,invalid).Prepare(),"null profile");
             File.WriteAllText(invalid,"{\"Codecc\":\"H264\"}");
             Reject(()=>new CliRequest(input,null,invalid).Prepare(),"unknown profile property");
+            File.WriteAllText(invalid,"{\"AssStyle\":{\"FontSiz\":150}}");
+            Reject(()=>new CliRequest(input,null,invalid).Prepare(),"unknown ASS style property");
+            File.WriteAllText(invalid,"{\"AssStyle\":{\"FontSizePercent\":999}}");
+            Reject(()=>new CliRequest(input,null,invalid).Prepare(),"ASS style out of range");
             Check(CliRequest.Parse(new[]{"--","-input.ts"}).Input=="-input.ts","option terminator");
             Check(File.ReadAllText(profile)==original && File.ReadAllText(named)=="existing video","profile and existing output preserved");
             Console.WriteLine("PASS: CLI parsing, profile paths, output naming/format, collisions, invalid profiles, no settings writes. No network or encoding used.");

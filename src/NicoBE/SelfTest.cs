@@ -20,6 +20,36 @@ public static class SelfTest
         {
             StorageLayoutTest.Verify(Check);
             CommentSpeedTest.Verify(Check);
+            PlaybackSpeedMemoryTest.VerifyAsync(Check).GetAwaiter().GetResult();
+            foreach(double rate in new[]{.5,1,2})
+            {
+                var config=new Config {AccelerateLongComments=false};
+                var applied=new CommentEngine(config);int measured=0;
+                applied.Measure=_=>{measured++;return (100,40,new object());};
+                applied.SetComments(new[]{new Comment(0,"反映テスト","#FFFFFF",1,CommentPosition.Scroll)});
+                applied.OnPosition(0,0);applied.SetPlaying(true,0);
+                var original=applied.Active.Single();
+                for(int i=1;i<=5;i++)
+                {
+                    applied.OnPosition(i*.2*rate,i*.2);
+                    double x=applied.X(original),motion=applied.MotionSeconds;
+                    applied.RefreshSettings();
+                    Check(ReferenceEquals(applied.Active.Single(),original) && applied.X(original)==x
+                        && applied.MotionSeconds==motion && measured==1,$"unchanged apply preserves scene at {rate}x, click {i}");
+                }
+                applied.SetPlaying(false,1);
+                double paused=applied.X(original);
+                config.PlaybackPanelVisible=false;config.AutoFetchPastLogs=true;
+                applied.RefreshSettings();applied.Tick(2);applied.RefreshSettings();
+                Check(ReferenceEquals(applied.Active.Single(),original) && applied.X(original)==paused,
+                    $"unrelated settings and repeated paused apply preserve scene at {rate}x");
+                config.FontSize=60;applied.RefreshSettings();
+                var resized=applied.Active.Single();
+                Check(!ReferenceEquals(resized,original),"changed layout is applied");
+                applied.RefreshSettings();Check(ReferenceEquals(applied.Active.Single(),resized),"second apply after layout change is a no-op");
+                applied.RefreshSettings(force:true);
+                Check(!ReferenceEquals(applied.Active.Single(),resized),"visibility and GPU recovery can explicitly reconstruct the scene");
+            }
             foreach(double rate in new[]{.5,1,1.5,2,3})
             {
                 var e=new CommentEngine(new() {AccelerateLongComments=false});
@@ -114,6 +144,25 @@ public static class SelfTest
             around.OnSeek(500,1);Check(snapshot.Count==3 && snapshot[0].Seconds==99,"captured log rows remain fixed after playback moves");
             var savedNg=System.Text.Json.JsonSerializer.Deserialize<Config>(System.Text.Json.JsonSerializer.Serialize(new Config {NgIds=new(){"id"},NgWords=new(){"語"}},Config.Json),Config.Json)!;
             Check(savedNg.Clone().NgIds.Single()=="id" && savedNg.NgWords.Single()=="語","NG settings survive serialization and cloning");
+            var variants=new[]{Chat(1,"red") with {Color="#FF0000"},Chat(1,"top") with {Position=CommentPosition.Top},
+                Chat(1,"big") with {SizeScale=1.3},Chat(1,"line\nbreak")};
+            Check(variants.All(c=>!new NgFilter(new Config()).Blocks(c)),"all four category filters default OFF");
+            var switches=new Action<Config,bool>[] {(c,v)=>c.NgColoredComments=v,(c,v)=>c.NgFixedComments=v,
+                (c,v)=>c.NgSizeChangedComments=v,(c,v)=>c.NgMultilineComments=v};
+            for(int i=0;i<switches.Length;i++)
+            {
+                var cfg=new Config();switches[i](cfg,true);var categoryFilter=new NgFilter(cfg.Clone());
+                Check(variants.Select(categoryFilter.Blocks).SequenceEqual(Enumerable.Range(0,4).Select(n=>n==i))
+                    && !categoryFilter.Blocks(Chat(1,"normal")),"category filter is independent and persists: "+i);
+                var categoryEngine=new CommentEngine(cfg);categoryEngine.SetComments(new[]{variants[i]});categoryEngine.OnSeek(1,0);
+                Check(categoryEngine.Active.Count==0,"category NG applies on initial seek: "+i);
+                switches[i](cfg,false);categoryEngine.RefreshSettings();Check(categoryEngine.Active.Count==1,"category NG OFF restores comments: "+i);
+                switches[i](cfg,true);categoryEngine.RefreshSettings();Check(categoryEngine.Active.Count==0,"category NG ON removes active comments: "+i);
+            }
+            var allCategories=new NgFilter(new Config {NgColoredComments=true,NgFixedComments=true,NgSizeChangedComments=true,NgMultilineComments=true});
+            Check(allCategories.Blocks(Chat(1,"bottom") with {Position=CommentPosition.Bottom})
+                && allCategories.Blocks(Chat(1,"small") with {SizeScale=.8}) && allCategories.Blocks(Chat(1,"a\rb"))
+                && !allCategories.Blocks(Chat(1,"😀") with {Color="#ffffff",SizeScale=1.0000001}),"bottom small CR line breaks and white emoji boundaries");
             Paths.WriteJson("self-test.json",new{passed=true,results});return 0;
         }
         catch(Exception ex){Paths.WriteJson("self-test.json",new{passed=false,results,error=ex.ToString()});return 1;}

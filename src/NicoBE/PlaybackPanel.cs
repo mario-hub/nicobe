@@ -20,6 +20,14 @@ internal sealed class PlaybackPanel : IDisposable
     nint owner;
     bool disposed;
     bool enabled=true;
+    internal event Action<string,bool>? SourceChanged;
+    internal event Action<string,bool>? CommonChanged;
+    internal event Action<bool>? FetchRequested;
+    internal event Action? SpeedChanging;
+    internal event Action<double>? SpeedChanged;
+    internal event Action? SpeedChangeFinished;
+    PanelCommentState? commentState;
+    internal void SetCommentState(PanelCommentState value){commentState=value;window?.SetCommentState(value);}
     int generation;
     readonly MpcPlaybackRate playbackRate=new();
     bool readingSpeed;
@@ -38,13 +46,14 @@ internal sealed class PlaybackPanel : IDisposable
     {
         if(disposed || !PlaybackPanelWindow.Speeds.Contains(speed))return false;
         int mine=generation;
+        SpeedChanging?.Invoke();
         speedRevision++;pendingSpeedCommands++;
         try
         {
             if(!await send(MpcClient.SetSpeed,speed.ToString("0.##",CultureInfo.InvariantCulture)) || disposed || mine!=generation)return false;
-            SelectedSpeed=speed;window?.SelectSpeed(speed);return true;
+            SelectedSpeed=speed;window?.SelectSpeed(speed);SpeedChanged?.Invoke(speed);return true;
         }
-        finally{pendingSpeedCommands--;nextSpeedRead=lastTick+.5;}
+        finally{pendingSpeedCommands--;nextSpeedRead=lastTick+.5;SpeedChangeFinished?.Invoke();}
     }
     internal Task<bool> JumpAsync(int seconds)=>!disposed && PlaybackPanelWindow.Jumps.Contains(seconds)
         ?send(MpcClient.JumpSeconds,seconds.ToString(CultureInfo.InvariantCulture)):Task.FromResult(false);
@@ -74,7 +83,7 @@ internal sealed class PlaybackPanel : IDisposable
         double scale=Math.Max(96,GetDpiForWindow(player))/96d;
         var viewport=new Rect(origin.X,origin.Y,client.Width,client.Height);
         // Keep buttons readable; very small video surfaces cannot contain the panel.
-        if(viewport.Width<320*scale || viewport.Height<210*scale){Hide();return;}
+        if(viewport.Width<320*scale || viewport.Height<140*scale){Hide();return;}
         var pointer=new Point(cursor.X,cursor.Y);
         var corner=ActivationBounds(viewport,scale);
         bool inPanel=window?.IsVisible==true && GetWindowRect(window.Handle,out var panelRect)
@@ -82,9 +91,17 @@ internal sealed class PlaybackPanel : IDisposable
         // Do not react through an unrelated window covering the player.
         nint root=Native.GetAncestor(hit,2);
         bool overPlayer=root==player || root==window?.Handle || IsCommentOverlay(root,player);
+        if(window?.MenuOpen==true){overPlayer=true;inPanel=true;}
         if(!hover.Update(overPlayer && corner.Contains(pointer),overPlayer && inPanel,now))
         {if(window?.IsVisible==true)window.Hide();return;}
-        window??=new PlaybackPanelWindow(ChangeSpeedAsync,JumpAsync,()=>openSettings?.Invoke());
+        if(window==null)
+        {
+            window=new PlaybackPanelWindow(ChangeSpeedAsync,JumpAsync,()=>openSettings?.Invoke());
+            window.SourceChanged+=(source,on)=>SourceChanged?.Invoke(source,on);
+            window.CommonChanged+=(name,on)=>CommonChanged?.Invoke(name,on);
+            window.FetchRequested+=force=>FetchRequested?.Invoke(force);
+            if(commentState!=null)window.SetCommentState(commentState);
+        }
         window.SelectSpeed(SelectedSpeed);
         window.Place(player,viewport,scale);
         if(window.IsVisible && now>=nextSpeedRead && !readingSpeed && pendingSpeedCommands==0)
@@ -113,11 +130,11 @@ internal sealed class PlaybackPanel : IDisposable
     }
     internal static Rect ActivationBounds(Rect viewport,double scale)
     {
-        // Approximate the two button rows (including wrapping) without creating
+        // Approximate the toolbar and two button rows (including wrapping) without creating
         // or measuring a hidden WPF window on every polling tick.
-        double width=Math.Min(548,viewport.Width/scale-24);
-        int columns=Math.Max(1,(int)((width-66)/68));
-        double height=20+84*Math.Ceiling(7d/columns);
+        double width=Math.Min(PlaybackPanelWindow.PreferredWidth,viewport.Width/scale-24);
+        int columns=Math.Max(1,(int)((width-88)/54));
+        double height=30+30*(Math.Ceiling(430/Math.Max(240,width-86))+Math.Ceiling(6d/columns)+Math.Ceiling(7d/columns));
         return PlaybackPanelWindow.Bounds(viewport,new Size(width*scale,height*scale),12*scale);
     }
     public void Dispose(){if(disposed)return;disposed=true;generation++;window?.Close();window=null;hover.Reset();}
@@ -140,11 +157,25 @@ internal sealed class PanelHover
 
 internal sealed class PlaybackPanelWindow : Window
 {
+    internal const double PreferredWidth=544;
+    internal event Action<string,bool>? SourceChanged;
+    internal event Action<string,bool>? CommonChanged;
+    internal event Action<bool>? FetchRequested;
+    readonly Dictionary<string,CheckBox> commentSwitches=new();
+    readonly TextBlock fetchStatus=new(){FontSize=14,Width=60,TextTrimming=TextTrimming.CharacterEllipsis,VerticalAlignment=VerticalAlignment.Center};
+    readonly TextBlock spinner=new(){Text="◌",FontSize=16,Width=14,Margin=new Thickness(0,0,6,0),VerticalAlignment=VerticalAlignment.Center,RenderTransformOrigin=new Point(.5,.5),RenderTransform=new RotateTransform()};
+    Button? fetchButton;
+    Button? refreshMenu;
+    readonly Popup sourcePopup=new(){Placement=PlacementMode.Bottom,StaysOpen=false,AllowsTransparency=true,Focusable=false};
+    internal bool MenuOpen=>sourcePopup.IsOpen;
+    bool updatingComments,fetchBusy;
     internal static readonly int[] Jumps={-30,-10,-5,5,10,30};
     internal static readonly double[] Speeds={.5,1,1.25,1.5,1.75,2,2.5};
     internal readonly Dictionary<double,Button> SpeedButtons=new();
     internal readonly Dictionary<int,Button> JumpButtons=new();
     internal Button SettingsButton {get;}
+    internal Button CommentOn {get;}
+    internal Button CommentOff {get;}
     readonly TextBlock error=new() {Text="MPC-BEの応答を確認できませんでした。",FontSize=14,TextWrapping=TextWrapping.Wrap,Visibility=Visibility.Collapsed,Margin=new Thickness(4,4,4,0)};
     int requestGeneration;
     bool busy;
@@ -156,33 +187,64 @@ internal sealed class PlaybackPanelWindow : Window
     internal PlaybackPanelWindow(Func<double,Task<bool>> changeSpeed,Func<int,Task<bool>> jump,Action? openSettings=null)
     {
         Title="NicoBE 操作パネル";WindowStyle=WindowStyle.None;ResizeMode=ResizeMode.NoResize;
-        WindowStartupLocation=WindowStartupLocation.Manual;Left=Top=-32000;Width=548;Height=112;
+        WindowStartupLocation=WindowStartupLocation.Manual;Left=Top=-32000;Width=PreferredWidth;Height=120;
         ShowInTaskbar=false;ShowActivated=false;Focusable=false;AllowsTransparency=true;
-        FontFamily=new FontFamily("Yu Gothic UI");FontSize=16;
+        FontFamily=new FontFamily("Yu Gothic UI");FontSize=14;
         SettingsTheme.Apply(this);Background=Brushes.Transparent;
         var body=new StackPanel();
         var frame=new Border {Background=new SolidColorBrush(Color.FromArgb(246,28,32,38)),BorderBrush=SettingsTheme.Line,
-            BorderThickness=new Thickness(1),CornerRadius=new CornerRadius(7),Padding=new Thickness(10,8,6,8),Child=body};Content=frame;
-        var seekRow=Row(body,"移動");
+            BorderThickness=new Thickness(1),CornerRadius=new CornerRadius(3),Padding=new Thickness(12,8,12,8),Child=body};Content=frame;
+        var toolbar=Row(body,"コメント");
+        var masterGroup=new UniformGrid{Columns=2};
+        CommentOn=MakeSegment("オン");CommentOff=MakeSegment("オフ");
+        CommentOff.BorderThickness=new Thickness(0);
+        CommentOn.Click+=(_,_)=>CommonChanged?.Invoke("master",true);
+        CommentOff.Click+=(_,_)=>CommonChanged?.Invoke("master",false);
+        masterGroup.Children.Add(CommentOn);masterGroup.Children.Add(CommentOff);
+        toolbar.Children.Add(SegmentFrame(masterGroup,74));
+        var sources=MakeButton("表示元 ▾");sources.Width=72;sources.ToolTip="NicoJK保存ログ・MP4内オリジナルログ・過去ログAPI・ASS字幕の選択";
+        toolbar.Children.Add(sources);sourcePopup.PlacementTarget=sources;
+        sources.Click+=(_,_)=>sourcePopup.IsOpen=!sourcePopup.IsOpen;
+        var menu=new StackPanel();
+        foreach(var item in new[]{("saved","NicoJK保存ログ"),("embedded","MP4内オリジナルログ"),("past","過去ログAPI"),("ass","ASS字幕")})
+        {
+            var toggle=MakeSwitch(item.Item2);toggle.Margin=new Thickness(4,3,4,5);commentSwitches[item.Item1]=toggle;menu.Children.Add(toggle);
+            string key=item.Item1;toggle.Click+=(_,_)=>{if(!updatingComments)SourceChanged?.Invoke(key,toggle.IsChecked==true);};
+        }
+        menu.Children.Add(new Border{BorderBrush=SettingsTheme.Line,BorderThickness=new Thickness(0,1,0,0),Margin=new Thickness(0,3,0,6)});
+        refreshMenu=MakeButton("過去ログを再取得");refreshMenu.Width=152;refreshMenu.Click+=(_,_)=>{sourcePopup.IsOpen=false;FetchRequested?.Invoke(true);};menu.Children.Add(refreshMenu);
+        sourcePopup.Child=new Border{Child=menu,Background=new SolidColorBrush(Color.FromRgb(28,32,38)),BorderBrush=SettingsTheme.Line,BorderThickness=new Thickness(1),CornerRadius=new CornerRadius(4),Padding=new Thickness(8)};
+        body.Children.Add(sourcePopup);
+        var fetchState=new StackPanel{Orientation=Orientation.Horizontal,Height=28,Margin=new Thickness(6,0,6,0)};
+        fetchState.Children.Add(spinner);fetchState.Children.Add(fetchStatus);toolbar.Children.Add(fetchState);
+        fetchButton=MakeButton("過去ログ取得");fetchButton.Width=108;fetchButton.SetResourceReference(BackgroundProperty,"PrimaryBrush");fetchButton.SetResourceReference(BorderBrushProperty,"AccentBrush");fetchButton.Click+=(_,_)=>FetchRequested?.Invoke(false);toolbar.Children.Add(fetchButton);
+        var automatic=MakeSwitch("自動");commentSwitches["auto"]=automatic;toolbar.Children.Add(automatic);
+        automatic.Margin=new Thickness(2,0,6,0);automatic.ToolTip="保存済みの実況コメントがない場合のみ自動取得します。";
+        automatic.Click+=(_,_)=>{if(!updatingComments)CommonChanged?.Invoke("auto",automatic.IsChecked==true);};
+        SettingsButton=MakeButton("");SettingsButton.Width=28;SettingsButton.Background=Brushes.Transparent;SettingsButton.BorderThickness=new Thickness(0);SettingsButton.Margin=new Thickness(0);
+        SettingsButton.Content=new TextBlock {Text="\uE713",FontFamily=new FontFamily("Segoe MDL2 Assets"),FontSize=17};
+        SettingsButton.ToolTip="設定を開く";
+        System.Windows.Automation.AutomationProperties.SetName(SettingsButton,"設定を開く");
+        SettingsButton.Click+=(_,_)=>openSettings?.Invoke();
+        var topRow=(Grid)toolbar.Parent;topRow.ColumnDefinitions.Add(new ColumnDefinition{Width=GridLength.Auto});
+        Grid.SetColumn(SettingsButton,2);SettingsButton.VerticalAlignment=VerticalAlignment.Top;topRow.Children.Add(SettingsButton);
+        AddDivider(body);var seekRow=SegmentRow(body,"秒送り");
         foreach(int seconds in Jumps)
         {
-            var button=MakeButton(seconds.ToString("+0;−0",CultureInfo.InvariantCulture)+"秒");
+            var button=MakeSegment(seconds.ToString("+0;−0",CultureInfo.InvariantCulture));
             button.ToolTip=seconds<0?$"{Math.Abs(seconds)}秒戻す":$"{seconds}秒送る";
             button.Click+=async (_,_)=>await Execute(()=>jump(seconds));seekRow.Children.Add(button);JumpButtons.Add(seconds,button);
         }
-        SettingsButton=MakeButton("");
-        SettingsButton.Content=new TextBlock {Text="\uE713",FontFamily=new FontFamily("Segoe MDL2 Assets"),FontSize=20};
-        SettingsButton.ToolTip="設定を開く";
-        System.Windows.Automation.AutomationProperties.SetName(SettingsButton,"設定を開く");
-        SettingsButton.Click+=(_,_)=>openSettings?.Invoke();seekRow.Children.Add(SettingsButton);
-        var speedRow=Row(body,"速度");
+        AddDivider(body);var speedRow=SegmentRow(body,"速度");
         foreach(double speed in Speeds)
         {
-            var button=MakeButton(speed.ToString("0.0#",CultureInfo.InvariantCulture)+"×");
+            var button=MakeSegment(speed.ToString("0.0#",CultureInfo.InvariantCulture)+"×");
             button.ToolTip=$"{speed.ToString("0.##",CultureInfo.InvariantCulture)}倍速に変更";
             button.Click+=async (_,_)=>await Execute(()=>changeSpeed(speed),()=>SelectSpeed(speed));
             speedRow.Children.Add(button);SpeedButtons.Add(speed,button);
         }
+        JumpButtons[30].BorderThickness=new Thickness(0);SpeedButtons[2.5].BorderThickness=new Thickness(0);
+        IsVisibleChanged+=(_,_)=>{AnimateSpinner();if(!IsVisible)sourcePopup.IsOpen=false;};spinner.Visibility=Visibility.Hidden;
         error.SetResourceReference(TextBlock.ForegroundProperty,"ErrorBrush");body.Children.Add(error);
         Closed+=(_,_)=>CancelPending();
         SourceInitialized+=(_,_)=>
@@ -192,14 +254,78 @@ internal sealed class PlaybackPanelWindow : Window
             HwndSource.FromHwnd(Handle)!.AddHook(Hook);
         };
     }
+    static readonly ControlTemplate CompactToggle=(ControlTemplate)System.Windows.Markup.XamlReader.Parse("""
+        <ControlTemplate xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" TargetType="CheckBox">
+          <StackPanel Orientation="Horizontal" Background="Transparent">
+            <Border x:Name="rail" Width="16" Height="16" CornerRadius="2" BorderBrush="#83909E" BorderThickness="1" Background="Transparent" VerticalAlignment="Center">
+              <Path x:Name="check" Data="M 2 6 L 5 9 L 11 2" Stroke="White" StrokeThickness="2" Visibility="Collapsed" VerticalAlignment="Center" HorizontalAlignment="Center"/>
+            </Border>
+            <ContentPresenter Margin="5,0,0,0" VerticalAlignment="Center"/>
+          </StackPanel>
+          <ControlTemplate.Triggers><Trigger Property="IsChecked" Value="True"><Setter TargetName="rail" Property="Background" Value="#008A98"/><Setter TargetName="check" Property="Visibility" Value="Visible"/></Trigger></ControlTemplate.Triggers>
+        </ControlTemplate>
+        """);
+    CheckBox MakeSwitch(string label)=>new(){Content=label,Template=CompactToggle,FontSize=14,Height=28,Focusable=false,IsTabStop=false,Margin=new Thickness(0,0,5,2),VerticalAlignment=VerticalAlignment.Center};
+    internal void SetCommentState(PanelCommentState value)
+    {
+        updatingComments=true;
+        try
+        {
+            // Auto is a global preference, not a per-file acquisition action.
+            foreach(var (name,on,available) in new[]{("saved",value.Saved,value.SavedAvailable),("embedded",value.Embedded,value.EmbeddedAvailable),("past",value.Past,value.PastAvailable),("ass",value.Ass,value.AssAvailable),("auto",value.Auto,true)})
+            {var toggle=commentSwitches[name];toggle.IsChecked=on;toggle.IsEnabled=available;toggle.Opacity=available?1:.45;if(name!="auto")toggle.ToolTip=available?(name=="saved"?"設定したNicoJKログフォルダのコメント":name=="embedded"?"MP4コンテナ内のオリジナル形式コメント":name=="ass"?"識別できた実況ASS。通常字幕は対象外です。":"コメントの表示切り替え"):"利用できるコメントがありません。";}
+            CommentOn.Background=value.Master?(Brush)FindResource("PrimaryBrush"):Brushes.Transparent;
+            CommentOff.Background=value.Master?Brushes.Transparent:(Brush)FindResource("PrimaryBrush");
+            fetchStatus.Text=value.Status;fetchStatus.ToolTip=value.Status+"\n"+value.Detail;fetchButton!.IsEnabled=value.CanFetch;fetchButton.ToolTip=value.Detail;
+            refreshMenu!.IsEnabled=value.CanRefresh;
+            if(fetchBusy!=value.Busy){fetchBusy=value.Busy;AnimateSpinner();}
+        }
+        finally{updatingComments=false;}
+    }
+    void AnimateSpinner()
+    {
+        var rotation=(RotateTransform)spinner.RenderTransform;
+        spinner.Visibility=fetchBusy?Visibility.Visible:Visibility.Hidden;
+        rotation.BeginAnimation(RotateTransform.AngleProperty,fetchBusy&&IsVisible?new System.Windows.Media.Animation.DoubleAnimation(0,360,TimeSpan.FromSeconds(1)){RepeatBehavior=System.Windows.Media.Animation.RepeatBehavior.Forever}:null);
+    }
     static WrapPanel Row(Panel parent,string label)
     {
-        var row=new Grid();row.ColumnDefinitions.Add(new ColumnDefinition {Width=new GridLength(48)});row.ColumnDefinitions.Add(new ColumnDefinition());
-        row.Children.Add(new TextBlock {Text=label,VerticalAlignment=VerticalAlignment.Center,FontSize=16,Margin=new Thickness(2,0,6,4)});
+        var row=new Grid();row.ColumnDefinitions.Add(new ColumnDefinition {Width=new GridLength(60)});row.ColumnDefinitions.Add(new ColumnDefinition());
+        row.Children.Add(new TextBlock {Text=label,VerticalAlignment=VerticalAlignment.Center,FontSize=14,Margin=new Thickness(0,0,2,2)});
         var buttons=new WrapPanel();Grid.SetColumn(buttons,1);row.Children.Add(buttons);parent.Children.Add(row);return buttons;
     }
-    Button MakeButton(string text)=>new() {Style=(Style)FindResource("PlaybackPanelButton"),Content=text,Width=64,Height=38,MinHeight=38,Padding=new Thickness(3,4,3,4),
-        Margin=new Thickness(0,0,4,4),FontSize=16,Focusable=false,IsTabStop=false};
+    Button MakeButton(string text)=>new() {Style=(Style)FindResource("PlaybackPanelButton"),Content=text,Width=57,Height=28,MinHeight=28,Padding=new Thickness(2,1,2,1),
+        Margin=new Thickness(0,0,4,0),Background=Brushes.Transparent,FontSize=14,Focusable=false,IsTabStop=false};
+    static readonly ControlTemplate SegmentTemplate=(ControlTemplate)System.Windows.Markup.XamlReader.Parse("""
+        <ControlTemplate xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" TargetType="Button">
+          <Border x:Name="chrome" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" Padding="{TemplateBinding Padding}">
+            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+          </Border>
+          <ControlTemplate.Triggers><Trigger Property="IsEnabled" Value="False"><Setter TargetName="chrome" Property="Opacity" Value="0.45"/></Trigger></ControlTemplate.Triggers>
+        </ControlTemplate>
+        """);
+    Button MakeSegment(string label)
+    {
+        var button=MakeButton(label);button.Template=SegmentTemplate;button.Width=double.NaN;
+        button.Margin=new Thickness(0);button.BorderThickness=new Thickness(0,0,1,0);
+        return button;
+    }
+    static Border SegmentFrame(UIElement content,double width=double.NaN)=>new(){Child=content,Width=width,BorderBrush=new SolidColorBrush(Color.FromRgb(108,121,133)),BorderThickness=new Thickness(1),CornerRadius=new CornerRadius(3),Margin=new Thickness(0,0,4,0),ClipToBounds=true};
+    static void AddDivider(Panel parent)=>parent.Children.Add(new Border{Height=6});
+    sealed class Segments:UniformGrid
+    {
+        protected override Size MeasureOverride(Size available)
+        {
+            Columns=double.IsFinite(available.Width)?Math.Min(Math.Max(1,Children.Count),Math.Max(1,(int)(available.Width/54))):Math.Max(1,Children.Count);
+            return base.MeasureOverride(available);
+        }
+    }
+    static Segments SegmentRow(Panel parent,string label)
+    {
+        var row=new Grid();row.ColumnDefinitions.Add(new ColumnDefinition{Width=new GridLength(60)});row.ColumnDefinitions.Add(new ColumnDefinition());
+        row.Children.Add(new TextBlock{Text=label,FontSize=14,VerticalAlignment=VerticalAlignment.Center});
+        var group=new Segments();var border=SegmentFrame(group);border.Margin=new Thickness(0);Grid.SetColumn(border,1);row.Children.Add(border);parent.Children.Add(row);return group;
+    }
     void Feedback(bool success)=>error.Visibility=success?Visibility.Collapsed:Visibility.Visible;
     void SetBusy(bool value)
     {
@@ -229,7 +355,7 @@ internal sealed class PlaybackPanelWindow : Window
         foreach(var (speed,button) in SpeedButtons)
         {
             bool active=selected==speed;
-            button.SetResourceReference(BackgroundProperty,active?"PrimaryBrush":"InputBrush");
+            if(active)button.SetResourceReference(BackgroundProperty,"PrimaryBrush");else button.Background=Brushes.Transparent;
             button.SetResourceReference(BorderBrushProperty,active?"AccentBrush":"LineBrush");
             button.FontWeight=active?FontWeights.Bold:FontWeights.Normal;
             System.Windows.Automation.AutomationProperties.SetItemStatus(button,active?"選択中":"未選択");
@@ -239,7 +365,7 @@ internal sealed class PlaybackPanelWindow : Window
     {
         if(owner!=player){new WindowInteropHelper(this).Owner=player;owner=player;}
         new WindowInteropHelper(this).EnsureHandle();
-        double desiredWidth=Math.Min(548,video.Width/scale-24);
+        double desiredWidth=Math.Min(PreferredWidth,video.Width/scale-24);
         Width=desiredWidth;
         ((FrameworkElement)Content).Measure(new Size(desiredWidth,double.PositiveInfinity));
         Height=((FrameworkElement)Content).DesiredSize.Height;

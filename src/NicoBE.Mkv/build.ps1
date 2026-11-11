@@ -25,7 +25,15 @@ $env:CL = ($env:CL + ' /experimental:deterministic "/pathmap:' + $PSScriptRoot +
 New-Item -ItemType Directory -Force -Path $build,$zlib,$env:TEMP | Out-Null
 
 $archive = Join-Path $PSScriptRoot 'ffmpeg-9.0.2.tar.xz'
-if ((Get-FileHash -LiteralPath $archive).Hash -ne '8C3850283EB25FA026482078A04051E0BE17347B09EF81A0849BEC15A96E002E') {
+$archiveHash = '8C3850283EB25FA026482078A04051E0BE17347B09EF81A0849BEC15A96E002E'
+$manifestPath=Join-Path $PSScriptRoot 'ffmpeg-source.json'
+if(Test-Path -LiteralPath $manifestPath){
+    $manifest=Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+    if($manifest.FormatVersion -ne 1 -or $manifest.File -cne 'ffmpeg-9.0.2-nicobe.tar.xz' -or
+       $manifest.SHA256 -notmatch '^[0-9A-Fa-f]{64}$' -or $manifest.UpstreamSHA256 -ne $archiveHash){throw 'Invalid source package manifest.'}
+    $archive=Join-Path $PSScriptRoot $manifest.File;$archiveHash=$manifest.SHA256
+}
+if ((Get-FileHash -LiteralPath $archive).Hash -ne $archiveHash) {
     throw "Source archive checksum mismatch: $archive"
 }
 if (!(Test-Path -LiteralPath "$source/configure")) {

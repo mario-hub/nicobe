@@ -31,7 +31,7 @@ internal sealed class LiveCommentSource
     public LiveCommentSource(RecordingInfo info,Config config)
     {
         recording=info;Channel=LogReader.ResolveChannel(info,config);
-        Folder=Path.GetFullPath(Path.Combine(config.NicoJkLogFolder,Channel));
+        Folder=string.IsNullOrWhiteSpace(config.NicoJkLogFolder)?"":Path.GetFullPath(Path.Combine(config.NicoJkLogFolder,Channel));
     }
     public LiveCommentBatch Read(bool rescan,CancellationToken token)
     {

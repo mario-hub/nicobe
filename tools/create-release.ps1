@@ -1,4 +1,4 @@
-param([string]$OutputDirectory='')
+﻿param([string]$OutputDirectory='')
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'console-encoding.ps1')
 $root = Split-Path -Parent $PSScriptRoot
@@ -10,38 +10,8 @@ if (!$releaseFolder.StartsWith($root + [IO.Path]::DirectorySeparatorChar,[String
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 Add-Type -AssemblyName System.IO.Compression
 
-$commonFiles = @('README.md', 'license/LICENSE', 'license/THIRD-PARTY-NOTICES.txt')
-if (Test-Path -LiteralPath (Join-Path $root 'assets\nicobe.ico') -PathType Leaf) {
-    $commonFiles += 'assets/nicobe.ico'
-}
-
-$packages = @(
-    @{
-        Name = 'NicoBE-win-x64'
-        VersionFile = 'version.txt'
-        BuildFolder = 'app'
-        IncludeMkv = $true
-        Binaries = @(
-            'NicoBE.exe', 'NicoBE.dll', 'NicoBE.Gpu.dll',
-            'NicoBE.deps.json', 'NicoBE.runtimeconfig.json'
-        )
-    },
-    @{
-        Name = 'NicoBE-Encoder-win-x64'
-        VersionFile = 'version_encoder.txt'
-        BuildFolder = 'app-encoder'
-        Binaries = @(
-            'NicoBE.Encoder.exe', 'NicoBE.Encoder.dll',
-            'NicoBE.Encoder.deps.json', 'NicoBE.Encoder.runtimeconfig.json',
-            'NicoBE.Encoder.Cli.exe', 'NicoBE.Encoder.Cli.dll',
-            'NicoBE.Encoder.Cli.deps.json', 'NicoBE.Encoder.Cli.runtimeconfig.json'
-        )
-    }
-    @{
-        Name = 'NicoBE-MKV-Source'
-        SourceOnly = $true
-    }
-)
+. (Join-Path $PSScriptRoot 'release-package.ps1')
+$packages = @(Get-AppPackages) + @(@{Name='NicoBE-MKV-Source';SourceOnly=$true})
 
 $stageRoot=[IO.Path]::GetFullPath((Join-Path $root ('temp\test-results\release-'+[Guid]::NewGuid().ToString('N'))))
 $pendingArchives = @{}
@@ -67,38 +37,17 @@ try {
         $pendingArchives[$destination] = $temporary
         $archive = [IO.Compression.ZipFile]::Open($temporary, [IO.Compression.ZipArchiveMode]::Create)
         try {
-            $prefix = $package.Name + '/'
-            $null = $archive.CreateEntry($prefix)
             $files = [ordered]@{}
             if ($package.SourceOnly) {
-                $sourceFolder = Join-Path $root 'src\NicoBE.Mkv'
-                foreach ($name in @('README.md','build.ps1','reader.c','reader.h','ffmpeg-9.0.2.tar.xz')) {
-                    $files[$name] = Join-Path $sourceFolder $name
-                }
-                $files['LICENSE-NicoBE.txt'] = Join-Path $root 'license\LICENSE'
-                foreach ($file in Get-ChildItem -LiteralPath (Join-Path $sourceFolder 'zlib') -File) {
-                    $files['zlib/' + $file.Name] = $file.FullName
+                $sourceFolder = Join-Path $stageRoot 'mkv-source'
+                & (Join-Path $PSScriptRoot 'prepare-mkv-source.ps1') -OutputDirectory $sourceFolder
+                foreach ($file in Get-ChildItem -LiteralPath $sourceFolder -File -Recurse) {
+                    $files[$file.FullName.Substring($sourceFolder.Length+1).Replace('\','/')] = $file.FullName
                 }
             } else {
-                foreach ($relativePath in $commonFiles) {
-                    $files[$relativePath] = Join-Path $root $relativePath
-                }
-                $files[$package.VersionFile] = Join-Path (Join-Path $root 'release') $package.VersionFile
-                $buildFolder = Join-Path $stageRoot $package.BuildFolder
-                foreach ($binary in $package.Binaries) {
-                    $files[$binary] = Join-Path $buildFolder $binary
-                }
-                if ($package.IncludeMkv) {
-                    foreach ($file in Get-ChildItem -LiteralPath (Join-Path $buildFolder 'mkv') -File) {
-                        $files['mkv/' + $file.Name] = $file.FullName
-                    }
-                }
+                $files = Get-AppPackageFiles $root (Join-Path $stageRoot $package.BuildFolder) $package
             }
-            foreach ($entryPath in $files.Keys) {
-                $null = [IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
-                    $archive, $files[$entryPath], ($prefix + $entryPath), [IO.Compression.CompressionLevel]::Optimal
-                )
-            }
+            Write-PackageEntries $archive $package.Name $files
         } finally {
             $archive.Dispose()
         }

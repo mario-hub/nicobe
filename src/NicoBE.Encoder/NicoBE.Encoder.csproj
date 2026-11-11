@@ -7,6 +7,10 @@
     <DefineConstants>$(DefineConstants);NICOBE_ENCODER</DefineConstants>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="..\Shared\*.cs" Link="Shared\%(Filename)%(Extension)"/>
+    <Compile Include="..\NicoBE\PastLogs\*.cs" Link="PastLogs\%(Filename)%(Extension)"/>
+    <Compile Include="..\NicoBE\Comments\CommentSources.cs" Link="Comments\CommentSources.cs"/>
+    <Compile Include="..\NicoBE\Comments\AssCommentClassifier.cs" Link="Comments\AssCommentClassifier.cs"/>
     <Compile Include="..\NicoBE\SafeFileLog.cs" Link="SafeFileLog.cs"/>
     <Compile Include="..\NicoBE\FailureTest.cs" Link="FailureTest.cs"/>
     <Compile Include="..\NicoBE\TsReader.cs" Link="TsReader.cs"/>
@@ -26,6 +30,7 @@
     <Compile Include="..\NicoBE\StorageLayoutTest.cs" Link="StorageLayoutTest.cs"/>
     <Compile Include="..\NicoBE\NgFilter.cs" Link="NgFilter.cs"/>
     <Compile Include="..\NicoBE\SettingsTheme.cs" Link="SettingsTheme.cs"/>
+    <Compile Include="..\NicoBE\FirstRunGuide.cs" Link="FirstRunGuide.cs"/>
     <Page Include="..\NicoBE\SettingsTheme.xaml" Link="SettingsTheme.xaml"/>
   </ItemGroup>
 </Project>

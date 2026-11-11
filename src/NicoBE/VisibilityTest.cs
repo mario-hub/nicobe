@@ -55,9 +55,18 @@ internal static class VisibilityTest
             Wait(()=>OwnedOverlay() is var window && window!=0 && Native.IsWindowVisible(window),"off to on without foreground focus or polling");
             Check(Native.GetWindow(host,3)==OwnedOverlay(),"overlay placed directly above host");
             Check(session.VisibleComments.Count==1,"paused comments restored on enable");
+            var unchanged=session.VisibleComments.Single();
+            for(int i=0;i<3;i++)session.ApplySettings(false);
+            Check(ReferenceEquals(session.VisibleComments.Single(),unchanged),"repeated apply keeps the active comment through the visibility setter");
             Toggle(false);Wait(()=>!Native.IsWindowVisible(OwnedOverlay()),"on to off immediately");
             Toggle(true);Wait(()=>Native.IsWindowVisible(OwnedOverlay()),"off to on again while paused");
             Check(Native.GetWindow(host,3)==OwnedOverlay(),"restored overlay remains above host");
+            typeof(MainWindow).GetMethod("OnMessage",BindingFlags.Instance|BindingFlags.NonPublic)!.Invoke(session,new object[]{MpcClient.State,"1"});
+            Check(!session.CommentsReady && session.VisibleComments.Count==0,"Loading alone clears the previous file's comments");
+            Wait(()=>!Native.IsWindowVisible(OwnedOverlay()),"Loading hides the old overlay before the new file is ready");
+            engine.SetComments(new[]{new Comment(0,"new file","#FFFFFF",1,CommentPosition.Scroll)});engine.OnSeek(0,0);
+            Toggle(true);Wait(()=>Native.IsWindowVisible(OwnedOverlay()),"overlay resumes after submitting the new scene");
+            Check(session.VisibleComments.Count==1 && session.VisibleComments[0].Comment.Text=="new file","new file does not retain the previous comment scene");
             Check(Native.GetForegroundWindow()==foreground,"foreground focus unchanged");
             Paths.WriteJson("visibility-test.json",new{passed=true,checks});return 0;
         }

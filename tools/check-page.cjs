@@ -4,8 +4,8 @@ const {spawn}=require('node:child_process');
 const {pathToFileURL}=require('node:url');
 const vm=require('node:vm');
 const root=path.resolve(__dirname,'..');
-const out=path.join(root,'temp','test-results','web-page');fs.mkdirSync(out,{recursive:true});
-const profile=path.join(root,'temp','web-check-'+Date.now());fs.mkdirSync(profile,{recursive:true});
+const out=process.env.NICOBE_TEST_OUTPUT||path.join(root,'temp','test-results','web-page');fs.mkdirSync(out,{recursive:true});
+const profile=path.join(out,'browser-profile');fs.mkdirSync(profile,{recursive:true});
 const executable=['C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe','C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe'].find(p=>fs.existsSync(p));
 if(!executable)throw Error('Chrome or Edge is required.');
 const browser=spawn(executable,[
@@ -40,6 +40,7 @@ browser.on('error',error=>{for(const task of pending.values()){clearTimeout(task
   sessionId=(await call('Target.attachToTarget',{targetId:page.targetId,flatten:true})).sessionId;
   async function evaluate(expression){const value=await call('Runtime.evaluate',{expression,returnByValue:true,awaitPromise:true});if(value.exceptionDetails)throw Error(JSON.stringify(value.exceptionDetails));return value.result.value;}
   await call('Page.enable');await call('Runtime.enable');await call('Network.enable');
+  await call('Network.setBlockedURLs',{urls:['http://*','https://*']});
   await call('Emulation.setDeviceMetricsOverride',{width:1440,height:1100,deviceScaleFactor:1,mobile:false});
   await call('Page.navigate',{url:pathToFileURL((process.env.NICOBE_PAGE_PATH||path.join(root,'src','Website','index.html'))).href});
   for(let n=0;n<50;n++){await pause(100);if(await evaluate('document.readyState==="complete"'))break;}
@@ -49,8 +50,8 @@ browser.on('error',error=>{for(const task of pending.values()){clearTimeout(task
   fs.writeFileSync(path.join(out,'desktop.png'),Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
   // Check the published link contract; do not create, inspect or download release ZIPs.
   result.downloads=await evaluate('Object.fromEntries([...document.querySelectorAll("[data-download]")].map(a=>[a.dataset.download,{href:a.getAttribute("href"),download:a.getAttribute("download")}]))');
-  const expected={nicobe:'NicoBE-win-x64.zip',encoder:'NicoBE-Encoder-win-x64.zip',mkvSource:'NicoBE-MKV-Source.zip'};
-  result.downloadLinks=Object.entries(expected).every(([key,name])=>result.downloads[key]?.href==='./'+name&&result.downloads[key]?.download===name);
+  const expected={nicobe:'NicoBE-win-x64.zip',encoder:'NicoBE-Encoder-win-x64.zip'};
+  result.downloadLinks=!result.downloads.mkvSource&&Object.entries(expected).every(([key,name])=>result.downloads[key]?.href==='./'+name&&result.downloads[key]?.download===name);
   result.metadata=await evaluate('(()=>{const graphs=[...document.querySelectorAll("script[type=\\\"application/ld+json\\\"]")].flatMap(s=>JSON.parse(s.textContent)["@graph"]||[]);return document.querySelectorAll("h1").length===1&&document.title.includes("ニコニコ実況")&&document.querySelector("meta[name=description]").content.includes("NicoJK")&&document.querySelector("meta[property=\\\"og:title\\\"]")!==null&&graphs.filter(x=>x["@type"]==="SoftwareApplication").length===2;})()');
   const analytics=await evaluate('document.getElementById("moreread-article-analytics").textContent');
   result.canonical=await evaluate('document.querySelector("link[rel=canonical]").href==="https://www.moreread.net/apps/nicobe/index.html"&&document.querySelector("meta[property=\\\"og:url\\\"]").content==="https://www.moreread.net/apps/nicobe/index.html"');

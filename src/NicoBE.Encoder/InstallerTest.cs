@@ -31,7 +31,7 @@ internal static class InstallerTest
     }
     internal static async Task Run()
     {
-        string root=Path.Combine(EncoderPaths.Root,"temp", "test-results","installer-"+Guid.NewGuid().ToString("N"));
+        string root=Path.Combine(EncoderPaths.Root,"temp", "test-results","installer-"+Guid.NewGuid().ToString("N")[..8]);
         var cases=new List<string>();const string version="ffmpeg-9.0.2-essentials_build";
         var zip=Zip(version+"/bin/ffmpeg.exe",version+"/bin/ffprobe.exe",version+"/LICENSE");
         using(var client=new HttpClient(new Feed(zip)))

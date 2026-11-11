@@ -187,7 +187,15 @@ public static class EncoderJob
         for(int i=2;Occupied(final);i++)final=Path.Combine(Path.GetFullPath(settings.OutputFolder),stem+$" ({i})"+extension);
         return final;
     }
-    public static async Task<EncodeResult> Run(string input,EncoderSettings settings,IProgress<EncodeProgress> progress,CancellationToken token,double? testSeconds=null,string? outputFile=null)
+    public static Task<EncodeResult> Run(string input,EncoderSettings settings,IProgress<EncodeProgress> progress,CancellationToken token,double? testSeconds=null,string? outputFile=null)
+        =>RunCore(input,settings,progress,token,testSeconds,outputFile,false);
+    // Slow input deterministically for cancellation tests; never used for normal encoding.
+    internal static Task<EncodeResult> RunPaced(string input,EncoderSettings settings,IProgress<EncodeProgress> progress,CancellationToken token)
+    {
+        if(ReleaseTestEnvironment.Root==null)throw new InvalidOperationException("Paced encoding requires an isolated test environment.");
+        return RunCore(input,settings,progress,token,null,null,true);
+    }
+    static async Task<EncodeResult> RunCore(string input,EncoderSettings settings,IProgress<EncodeProgress> progress,CancellationToken token,double? testSeconds,string? outputFile,bool paced)
     {
         string requestedBackend=settings.Backend;
         bool cpuFallback=await EncoderCapabilities.Resolve(settings,token);
@@ -223,11 +231,11 @@ public static class EncoderJob
             PreparedComments? comments=null;
             if(settings.EmbedComments || settings.SaveExternalAss)
             {
-                progress.Report(new("コメントを準備",0,"NicoJKログを読み込んでいます"));
+                progress.Report(new("コメントを準備",0,settings.UsePastLogComments?"保存ログ・過去ログを準備しています（共有取得の待機を含む）":"NicoJKログを読み込んでいます"));
                 var commentConfig=Config.Load(false);commentConfig.NicoJkLogFolder=settings.NicoJkLogFolder;
                 try
                 {
-                    comments=await Task.Run(()=>LogReader.Prepare(recording with {End=recording.Start.AddSeconds(duration+5)},commentConfig,token,settings.Container=="MP4" && settings.EmbedComments),token);
+                    comments=await PastLogEncoder.PrepareAsync(recording with {End=recording.Start.AddSeconds(duration+5)},commentConfig,settings.UsePastLogComments,warnings,token);
                     if(comments.Malformed>0)warnings.Add($"読み取れないコメントが {comments.Malformed} 件あり、保存対象から除外しました。");
                     if((comments.SourceComments?.Count??comments.Comments.Count)==0)
                     {warnings.Add("対象コメントが0件のため、コメントを保存せずに動画を出力しました。");comments=null;}
@@ -243,12 +251,18 @@ public static class EncoderJob
             await File.AppendAllTextAsync(log,"Dual mono (stream: Japanese is main): "+JsonSerializer.Serialize(dualMono)+"\n",token);
             bool fullTwoPass=settings.Backend=="CPU" && settings.Passes==2;
             string? stats=null;
+            List<string> PassArguments(int pass)
+            {
+                var args=Arguments(settings,input,partial,video,audio,testSeconds,pass,stats,dualMono);
+                if(paced)args.InsertRange(0,new[]{"-readrate","0.5"});
+                return args;
+            }
             if(fullTwoPass)
             {
                 passDirectory=Path.Combine(EncoderPaths.Temp,"passes-"+stamp);Directory.CreateDirectory(passDirectory);stats=Path.Combine(passDirectory,"stats");
-                await RunPass(settings,Arguments(settings,input,partial,video,audio,testSeconds,1,stats,dualMono),log,duration,progress,token,1,2);
+                await RunPass(settings,PassArguments(1),log,duration,progress,token,1,2);
             }
-            await RunPass(settings,Arguments(settings,input,partial,video,audio,testSeconds,fullTwoPass?2:0,stats,dualMono),log,duration,progress,token,fullTwoPass?2:1,fullTwoPass?2:1);
+            await RunPass(settings,PassArguments(fullTwoPass?2:0),log,duration,progress,token,fullTwoPass?2:1,fullTwoPass?2:1);
             encodedSuccessfully=true;
             progress.Report(new("同期情報を保存",1,"出力動画を確認しています"));
             using var encoded=await Probe(settings.Ffprobe,partial,token);
@@ -306,7 +320,7 @@ public static class EncoderJob
                 double offset=(recording.Start-metadata.PlaybackZeroUtc).TotalSeconds;
                 var selected=comments.Comments.Select(c=>c with {MediaSeconds=c.MediaSeconds+offset})
                     .Where(c=>c.MediaSeconds>=0 && c.MediaSeconds<outputDuration).ToList();
-                int written=AssComments.Write(partialAss,selected,token,outputDuration,settings.CommentSizePercent);
+                int written=AssComments.Write(partialAss,selected,token,outputDuration,settings.AssStyle);
                 var restored=AssComments.ReadFile(partialAss,token);
                 if(written>0 && restored.Count==0)throw new IOException("外部ASSコメントの読み戻しに失敗しました。");
                 if(written==0){File.Delete(partialAss);warnings.Add("配置できるコメントがないため、外部ASSファイルは作成しませんでした。");}
@@ -373,7 +387,7 @@ public static class EncoderJob
             bool hasAss=false;
             if(comments!=null)
             {
-                hasAss=AssComments.Write(ass,comments,token,metadata.DurationSeconds,settings.CommentSizePercent)>0;
+                hasAss=AssComments.Write(ass,comments,token,metadata.DurationSeconds,settings.AssStyle)>0;
                 if(hasAss)args.AddRange(new[]{"-i",ass});
                 else warnings.Add("配置できるコメントがないため、MKVにASS字幕を格納しませんでした。");
             }

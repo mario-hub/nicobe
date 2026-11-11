@@ -26,6 +26,17 @@ internal static class StorageLayoutTest
                 && layout.FfmpegDirectory == Path.Combine(full, "ffmpeg"), "portable layout: " + executable);
         }
         check(Paths.Config == Path.Combine(StorageLayout.Current.PlayerDirectory, "nicobe.json"), "player settings location");
+        if(ReleaseTestEnvironment.Root is {} testRoot)
+        {
+            check(StorageLayout.Current.PlayerDirectory==testRoot && StorageLayout.Current.EncoderDirectory==testRoot,
+                "release test settings remain in isolated executable directory");
+            check(StorageLayout.PastLogCacheDirectory.StartsWith(testRoot+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase),
+                "release test cache does not use personal LocalAppData");
+            using var client=new System.Net.Http.HttpClient(new ReleaseTestEnvironment.OfflineHandler());
+            bool blocked=false;
+            try{client.GetAsync("https://example.invalid/").GetAwaiter().GetResult();}catch(InvalidOperationException){blocked=true;}
+            check(blocked,"release test HTTP handler rejects external requests");
+        }
 #if NICOBE_ENCODER
         check(Paths.Root == StorageLayout.Current.EncoderDirectory
             && Encoder.EncoderPaths.Settings == Path.Combine(Paths.Root, "encoder-settings.json")

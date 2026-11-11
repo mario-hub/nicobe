@@ -19,11 +19,12 @@ public sealed class MainWindow : Window
     readonly CommentEngine engine;
     readonly OverlayWindow overlay;
     readonly PlaybackPanel playbackPanel;
+    readonly PlaybackSpeedMemory speedMemory;
     MpcClient? mpc;
     readonly SubtitleControl subtitles;
     CancellationTokenSource? preparation;
-    LiveCommentSession? liveComments;
-    string? lastLiveError;
+    PlaybackCommentSession? commentSession;
+    double lastPanelUpdate;
     int generation;
     string? currentFile;
     double lastPositionWall=double.NegativeInfinity,lastStats;
@@ -33,6 +34,7 @@ public sealed class MainWindow : Window
     double nextGpuRecovery,gpuHealthySince;
     internal event Action<string>? Failure;
     internal event Action<nint>? SettingsRequested;
+    internal event Action<string,bool>? CommonSettingRequested;
     void ReportFailure(string category,string message)
     {
         status.Text=message;
@@ -56,11 +58,12 @@ public sealed class MainWindow : Window
         get=>showComments.IsChecked==true;
         set
         {
+            bool changed=CommentsVisible!=value;
             showComments.IsChecked=value;
             if(closing)return;
             // A tray click must update the native overlay immediately, including
             // while playback is paused or MPC-BE does not have foreground focus.
-            if(value)engine.RefreshSettings();
+            if(changed && value)engine.RefreshSettings(force:true);
             PublishScene();
         }
     }
@@ -68,7 +71,13 @@ public sealed class MainWindow : Window
     {
         this.config=config;engine=new(config);overlay=new(engine,config);
         playbackPanel=new((command,value)=>mpc?.SendControlAsync(command,value)??Task.FromResult(false),()=>SettingsRequested?.Invoke(mpc?.PlayerWindow??0)) {Enabled=config.PlaybackPanelVisible};
+        speedMemory=new(speed=>mpc?.SendControlAsync(MpcClient.SetSpeed,speed.ToString("0.########",CultureInfo.InvariantCulture))??Task.FromResult(false),
+            message=>ReportFailure("playback-speed",message)) {Enabled=config.KeepPlaybackSpeed};
+        playbackPanel.SpeedChanging+=speedMemory.UserCommandStarted;
+        playbackPanel.SpeedChanged+=speedMemory.UserSpeedChanged;
+        playbackPanel.SpeedChangeFinished+=speedMemory.UserCommandFinished;
         subtitles=new((command,value)=>mpc?.Send(command,value)??false);
+        WireCommentPanel();
         CommentsVisible=config.CommentsVisible;
         Title="NicoBE — MPC-BE 実況コメント";Width=760;Height=490;MinWidth=650;MinHeight=440;
         FontFamily=new FontFamily("Yu Gothic UI");FontSize=16;Background=new SolidColorBrush(Color.FromRgb(245,247,250));Icon=AppAssets.WindowIcon;
@@ -92,7 +101,7 @@ public sealed class MainWindow : Window
         Closed+=(_,_)=>
         {
             closing=true;StopLiveComments();preparation?.Cancel();preparation?.Dispose();preparation=null;poll.Stop();
-            playbackPanel.Dispose();subtitles.Restore();engine.Reset();overlay.Close();currentFile=null;
+            speedMemory.Dispose();playbackPanel.Dispose();subtitles.Restore();engine.Reset();overlay.Close();currentFile=null;
             if(mpc!=null){mpc.Message-=OnMessage;mpc.Dispose();mpc=null;}
         };
     }
@@ -104,66 +113,37 @@ public sealed class MainWindow : Window
     {
         if(closing)return;
         playbackPanel.Enabled=config.PlaybackPanelVisible;
+        speedMemory.Enabled=config.KeepPlaybackSpeed;
         CommentsVisible=config.CommentsVisible;
         overlay.RefreshFont();
         engine.RefreshSettings();
+        commentSession?.SettingsChanged();
         if(reloadLogs && currentFile!=null)_=PrepareCommentsAsync(currentFile);
         else PublishScene();
     }
     async Task PrepareCommentsAsync(string file)
     {
-        file=Path.GetFullPath(file);
-        reportedErrors.Clear();gpuRecoveryAttempts=0;nextGpuRecovery=0;
-        StopLiveComments();
-        if(!File.Exists(file)) {status.Text="TSファイルが見つかりません。";return;}
-        if(currentFile==file)subtitles.Restore();
-        subtitles.Reset();
-        if(!new[]{".ts",".m2ts",".mts",".mp4",".mkv"}.Contains(Path.GetExtension(file).ToLowerInvariant()))
-        {generation++;preparation?.Cancel();currentFile=file;engine.Reset();PublishScene();status.Text="コメント対象外のファイルです。";return;}
-        int mine=++generation;preparation?.Cancel();preparation?.Dispose();preparation=new();
-        var token=preparation.Token;currentFile=file;engine.Reset();PublishScene();fileLabel.Text=Path.GetFileName(file);status.Text="コメントをバックグラウンドで準備中…";
+        file=Path.GetFullPath(file);var selected=currentFile==file?commentSession?.Selection:null;
+        overlay.Follow(mpc?.PlayerWindow??0,false);
+        int mine=++generation;engine.Reset();lastPositionWall=double.NegativeInfinity;
+        reportedErrors.Clear();StopLiveComments();
+        if(currentFile==file)subtitles.Restore();subtitles.Reset();
+        currentFile=file;PublishScene();
+        if(!File.Exists(file)||!new[]{".ts",".m2ts",".mts",".mp4",".mkv"}.Contains(Path.GetExtension(file).ToLowerInvariant()))return;
         if(knownPlaying.HasValue)engine.SetPlaying(knownPlaying.Value,wall.Elapsed.TotalSeconds);
-        var prepareConfig=config.Clone();
-        if(new[]{".ts",".m2ts",".mts"}.Contains(Path.GetExtension(file).ToLowerInvariant()))
+        var session=new PlaybackCommentSession(file,config,(comments,reset,append)=>
         {
-            try
-            {
-                liveComments=new(file,prepareConfig,batch=>Dispatcher.BeginInvoke(()=>
-                {
-                    if(closing || mine!=generation)return;
-                    bool first=!engine.Ready;
-                    engine.AppendComments(batch.Added);PublishScene();lastLiveError=null;
-                    status.Text=$"{batch.Channel} · {engine.CommentCount:N0} 件 · コメントの追記を監視中";
-                    if(batch.Warning!=null)ReportFailure("live-warning","一部のコメントを読み込めません。再試行します。\n"+batch.Warning);
-                    details.Text=$"放送開始: {batch.Recording.Start:yyyy/MM/dd HH:mm:ss.fff}　ログ: {batch.Files} ファイル";
-                    if(first || batch.Added.Count>0)
-                        TraceLog.Write($"live-comments pid={PlayerId} added={batch.Added.Count} total={engine.CommentCount} files={batch.Files} malformed={batch.Malformed}");
-                }),message=>Dispatcher.BeginInvoke(()=>
-                {
-                    if(closing || mine!=generation)return;
-                    status.Text="コメントを待っています: "+message;
-                    if(lastLiveError!=message){lastLiveError=message;ReportFailure("live-wait","コメントを待っています。読み取りを再試行します。\n"+message);}
-                }),token);
-            }
-            catch(Exception ex){ReportFailure("live-comments-error","コメント監視を開始できません: "+ex.Message);}
-            return;
-        }
-        var task=Task.Run(()=>LogReader.Prepare(file,prepareConfig,token),token);
-        try
+            if(closing||mine!=generation)return;
+            if(append)engine.AppendComments(comments);else if(reset)engine.SetComments(comments);else engine.UpdateComments(comments);
+            PublishScene();
+        },value=>
         {
-            var loaded=await task;
-            if(mine!=generation || closing) return;
-            engine.SetComments(loaded.Comments);PublishScene();
-            subtitles.SetSource(loaded.Subtitle);
-            status.Text=$"{loaded.Channel} · {loaded.Comments.Count:N0} 件のコメントを準備しました";
-            string timing=loaded.Recording.NetworkId==0?"ASSの再生時刻で同期":$"放送開始: {loaded.Recording.Start:yyyy/MM/dd HH:mm:ss.fff}";
-            details.Text=$"{timing}　ログ: {loaded.Files} ファイル\n描画速度: {config.ScrollPixelsPerSecond:0} px/秒　設定: nicobe.json";
-            TraceLog.Write($"ready count={loaded.Comments.Count} files={loaded.Files} channel={loaded.Channel} start={loaded.Recording.Start:O} malformed={loaded.Malformed}");
-            try{Paths.WriteJson($"recording-{PlayerId}.json",new {loaded.Recording,loaded.Channel,Count=loaded.Comments.Count,loaded.Files,loaded.Malformed});}
-            catch(Exception ex) when(ex is IOException or UnauthorizedAccessException){TraceLog.Write("recording-diagnostic "+ex.Message);}
-        }
-        catch(OperationCanceledException){}
-        catch(Exception ex){if(mine==generation && !closing)ReportFailure("prepare-error","コメントを準備できません。映像の再生は継続できます。\n"+ex.Message);}
+            if(closing||mine!=generation)return;
+            if(subtitles.CommentDisplayedByPlayer)value=value with{Status="MPC-BEで実況字幕を表示中",Detail=value.Detail+"\n二重表示を避けるためNicoBEの描画を保留しています。"};
+            else if(subtitles.AwaitingSuppression)value=value with{Status="字幕の切り替え待ち"};
+            playbackPanel.SetCommentState(value);status.Text=value.Status;details.Text=value.Detail;
+        },subtitles.SetSource,selection:selected,position:()=>engine.MediaPosition);
+        commentSession=session;await session.StartAsync();
     }
     void OnMessage(uint code,string value)
     {
@@ -174,10 +154,12 @@ public sealed class MainWindow : Window
             case MpcClient.SubtitleTracks:
                 subtitles.Receive(value);break;
             case MpcClient.Connect:
+                speedMemory.Reset();
                 playbackPanel.Reset();
                 knownPlaying=null;inferencePosition=null;lastInferredMovement=now;engine.SetPlaying(false,now);
                 TraceLog.Write("connected "+value);mpc!.Send(MpcClient.GetNowPlaying);mpc.Send(MpcClient.GetPosition);break;
             case MpcClient.PlayMode:
+                if(value=="0")speedMemory.PlaybackResumed();
                 knownPlaying=value=="0";engine.SetPlaying(knownPlaying.Value,now);TraceLog.Write($"playmode pid={PlayerId} "+value);break;
             case MpcClient.Position:
                 if(double.TryParse(value,NumberStyles.Float,CultureInfo.InvariantCulture,out double pos))
@@ -203,29 +185,41 @@ public sealed class MainWindow : Window
                 if(entries.Length>1 && int.TryParse(entries[^1],out int index) && index>=0 && index<entries.Length-1 && File.Exists(entries[index]))OnPlayerFile(entries[index]);
                 break;
             case MpcClient.State:
-                if(value is "0" or "3") {playbackPanel.Reset();StopLiveComments();subtitles.Reset();generation++;preparation?.Cancel();currentFile=null;engine.Reset();}
+                if(value is "0" or "1" or "3")speedMemory.BeginFileChange();
+                if(value is "0" or "1" or "3")
+                {
+                    // Some opens announce Loading before Closing/Closed. Stop
+                    // displaying the previous file as soon as loading begins.
+                    overlay.Follow(mpc?.PlayerWindow??0,false);generation++;
+                    playbackPanel.Reset();StopLiveComments();subtitles.Reset();preparation?.Cancel();
+                    currentFile=null;knownPlaying=null;inferencePosition=null;lastPositionWall=double.NegativeInfinity;engine.Reset();
+                }
                 break;
             case MpcClient.Disconnect:
+                speedMemory.Reset();
                 playbackPanel.Reset();StopLiveComments();subtitles.Reset();generation++;preparation?.Cancel();currentFile=null;knownPlaying=null;inferencePosition=null;engine.Reset();status.Text="MPC-BEは終了しました。";break;
             case MpcClient.End:
+                speedMemory.PlaybackEnded();
                 engine.SetPlaying(false,now);engine.Active.Clear();status.Text="再生終了。";break;
         }
         PublishScene();
     }
     void OnPlayerFile(string file)
     {
+        speedMemory.FileLoaded(Path.GetFullPath(file));
         if(!string.Equals(Path.GetFullPath(file),currentFile,StringComparison.OrdinalIgnoreCase)){playbackPanel.Reset();_=PrepareCommentsAsync(file);}
     }
     void Poll(object? sender,EventArgs e)
     {
         if(mpc==null)return;
         mpc.Watch();
+        _=speedMemory.TickAsync(mpc.PlayerWindow,wall.Elapsed.TotalSeconds);
         // Speed changes can delay position replies; that must not hide the controls.
         playbackPanel.Tick(mpc.PlayerWindow,currentFile!=null,wall.Elapsed.TotalSeconds);
         mpc.Send(MpcClient.GetPosition);
         PublishScene();
-        var gpu=overlay.GetStats();
-        position.Text=$"{(engine.Playing?"再生中":"停止 / 一時停止")}　{TimeSpan.FromSeconds(Math.Max(0,engine.MediaPosition)):hh\\:mm\\:ss}　表示 {engine.Active.Count} 件　混雑時省略 {engine.Dropped:N0} 件\nGPU描画 {gpu.Fps:F1} FPS / 目標60　文字準備待ち {gpu.Pending} 件";
+        var gpu=overlay.GetStats();var display=overlay.GetDisplayStats();
+        position.Text=$"{(engine.Playing?"再生中":"停止 / 一時停止")}　{TimeSpan.FromSeconds(Math.Max(0,engine.MediaPosition)):hh\\:mm\\:ss}　表示 {engine.Active.Count} 件　混雑時省略 {engine.Dropped:N0} 件\nGPU描画 {gpu.Fps:F1} FPS / 目標{display.TargetFps:F2}　文字準備待ち {gpu.Pending} 件";
         double now=wall.Elapsed.TotalSeconds;
         if(gpu.Error!=0)
         {
@@ -233,7 +227,7 @@ public sealed class MainWindow : Window
             if(gpuRecoveryAttempts<3 && now>=nextGpuRecovery)
             {
                 gpuRecoveryAttempts++;nextGpuRecovery=now+5;
-                try{overlay.RecreateRenderer();engine.RefreshSettings();PublishScene();TraceLog.Write("GPU renderer recovered");}
+                try{overlay.RecreateRenderer();engine.RefreshSettings(force:true);PublishScene();TraceLog.Write("GPU renderer recovered");}
                 catch(Exception ex){TraceLog.Write("GPU recovery failed "+ex.Message);}
                 if(overlay.GetStats().Error!=0 && gpuRecoveryAttempts==3)
                     ReportFailure("gpu-error",$"GPU描画を復旧できません (0x{gpu.Error:X8})。NicoBEを再起動してください。");
@@ -243,15 +237,22 @@ public sealed class MainWindow : Window
         {gpuRecoveryAttempts=0;reportedErrors.Remove("gpu-error");}
         if(now-lastStats>=5 && mpc.Connected)
         {
-            lastStats=now;TraceLog.Write($"sync pid={PlayerId} media={engine.MediaPosition:F3} motion={engine.MotionSeconds:F3} playing={engine.Playing} active={engine.Active.Count} dropped={engine.Dropped} gpuFps={gpu.Fps:F2} cpuMs={gpu.CpuMs:F3} cacheMs={gpu.CacheMs:F3} pending={gpu.Pending} error=0x{gpu.Error:X8}");
+            lastStats=now;var pacing=overlay.GetPacingStats();TraceLog.Write($"sync pid={PlayerId} media={engine.MediaPosition:F3} motion={engine.MotionSeconds:F3} playing={engine.Playing} active={engine.Active.Count} dropped={engine.Dropped} gpuFps={gpu.Fps:F2} refreshHz={display.RefreshHz:F3} targetFps={display.TargetFps:F3} divisor={display.Divisor} outputSync={pacing.OutputSync} frameMeanMs={pacing.MeanMs:F3} frameP95Ms={pacing.P95Ms:F3} frameMaxMs={pacing.MaxMs:F3} presentBusy={pacing.Busy} cpuMs={gpu.CpuMs:F3} cacheMs={gpu.CacheMs:F3} pending={gpu.Pending} error=0x{gpu.Error:X8}");
         }
     }
-    void StopLiveComments(){liveComments?.Dispose();liveComments=null;lastLiveError=null;}
+    void WireCommentPanel()
+    {
+        playbackPanel.SourceChanged+=(source,on)=>commentSession?.Choose(source,on);
+        playbackPanel.CommonChanged+=(name,on)=>CommonSettingRequested?.Invoke(name,on);
+        playbackPanel.FetchRequested+=force=>{if(commentSession!=null)_=commentSession.FetchAsync(force);};
+    }
+    void StopLiveComments(){commentSession?.Dispose();commentSession=null;}
     void PublishScene()
     {
         double now=wall.Elapsed.TotalSeconds;engine.Tick(now);
         overlay.Redraw(Math.Max(0,.65-(now-lastPositionWall)));
-        subtitles.Poll(engine.Ready && CommentsVisible,now);
-        overlay.Follow(mpc?.PlayerWindow??0,engine.Ready && CommentsVisible && now-lastPositionWall<2);
+        subtitles.Poll(engine.Ready,now);
+        if(now-lastPanelUpdate>=1){lastPanelUpdate=now;commentSession?.Publish();}
+        overlay.Follow(mpc?.PlayerWindow??0,engine.Ready && CommentsVisible && !subtitles.CommentDisplayedByPlayer && !subtitles.AwaitingSuppression && now-lastPositionWall<2);
     }
 }

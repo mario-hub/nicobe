@@ -28,7 +28,8 @@ public sealed class FfmpegDownloadWindow : Window
             if(started)return;started=true;
             try
             {
-                using var client=new HttpClient {Timeout=TimeSpan.FromMinutes(20)};
+                using var client=ReleaseTestEnvironment.Root!=null ? new HttpClient(new ReleaseTestEnvironment.OfflineHandler()) : new HttpClient();
+                client.Timeout=TimeSpan.FromMinutes(20);
                 var reporter=new Progress<InstallProgress>(p=>{if(finished||cancellation.IsCancellationRequested)return;message.Text=p.Message;progress.IsIndeterminate=!p.Fraction.HasValue;if(p.Fraction.HasValue)progress.Value=p.Fraction.Value;});
                 InstalledPath=await FfmpegInstaller.Install(client,FfmpegInstaller.InstallRoot,reporter,cancellation.Token);
                 finished=true;DialogResult=true;

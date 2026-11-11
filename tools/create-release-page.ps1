@@ -5,6 +5,7 @@
     [string]$Ga4IdFile = ''
 )
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'console-encoding.ps1')
 $root = Split-Path -Parent $PSScriptRoot
 $output = [IO.Path]::GetFullPath($OutputPath)
 if (!$output.StartsWith($root + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) -or

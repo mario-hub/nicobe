@@ -9,10 +9,10 @@ public static class EncoderPreview
 {
     public static int Run()
     {
-        InstallerTest.Run().GetAwaiter().GetResult();
+        Directory.CreateDirectory(Path.Combine(EncoderPaths.Root,"temp","test-results"));
         string settingsFile=Path.Combine(EncoderPaths.Root,"temp", "test-results","encoder-settings-roundtrip.json");
         var saved=new EncoderSettings {Codec="H265",Backend="CPU",Width=1600,Height=900,RateControl="Bitrate",Quality=27,BitrateMbps=8.5,Speed="Quality",Deinterlace="Off",Audio="AAC128",FrameRate=24,EmbedComments=false,CommentSizePercent=135,OutputFolder=Path.Combine(EncoderPaths.Root,"temp", "test-results","encoder-custom-output")};
-        saved.Save(settingsFile);var restored=EncoderSettings.Load(settingsFile);
+        saved.Save(settingsFile,requireFiles:false);var restored=EncoderSettings.Load(settingsFile);
         if(System.Text.Json.JsonSerializer.Serialize(saved)!=System.Text.Json.JsonSerializer.Serialize(restored))throw new Exception("エンコード設定の保存・復元検証に失敗しました。");
         var fallback=new EncoderSettings {Ffmpeg=Path.Combine(EncoderPaths.Root,"temp", "test-results","missing-ffmpeg.exe")};
         if(!EncoderCapabilities.Resolve(fallback).GetAwaiter().GetResult() || fallback.Backend!="CPU" || fallback.Passes!=2)throw new Exception("NVENC unavailable fallback failed");
@@ -32,7 +32,7 @@ public static class EncoderPreview
     {
         Directory.CreateDirectory(Path.Combine(EncoderPaths.Root,"temp", "test-results"));
         var window=new EncoderWindow(Array.Empty<string>());window.PreviewFailure();var content=(FrameworkElement)window.Content;
-        if(((System.Windows.Controls.TabItem)window.Tabs.Items[3]).Header.ToString()!="その他"
+        if(((System.Windows.Controls.TabItem)window.Tabs.Items[4]).Header.ToString()!="その他"
             || !DateTime.TryParseExact(LicensePanel.ReleaseDate,"yyyy-MM-dd",System.Globalization.CultureInfo.InvariantCulture,System.Globalization.DateTimeStyles.None,out _)
             || !LicensePanel.WebsiteStartInfo().UseShellExecute || LicensePanel.WebsiteStartInfo().FileName!=LicensePanel.WebsiteUrl)
             throw new Exception("Other tab metadata or external website target is invalid.");

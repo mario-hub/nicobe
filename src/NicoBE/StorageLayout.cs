@@ -7,7 +7,9 @@ namespace NicoBE;
 public sealed record StorageLayout(string ExecutableDirectory, bool UsesLocalAppData,
     string PlayerDirectory, string EncoderDirectory, string FfmpegDirectory)
 {
-    public static StorageLayout Current { get; } = Resolve(AppContext.BaseDirectory,
+    public static string PastLogCacheDirectory => ReleaseTestEnvironment.Root is {} testRoot ? Path.Combine(testRoot,"cache","jikkyo","v1") : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NicoBE", "cache", "jikkyo", "v1");
+    public static StorageLayout Current { get; } = ReleaseTestEnvironment.Root is {} root
+        ? new(root,false,root,root,Path.Combine(root,"ffmpeg")) : Resolve(AppContext.BaseDirectory,
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         new[] { Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
             Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),

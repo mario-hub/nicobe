@@ -83,7 +83,8 @@ public sealed class ResidentController : IDisposable
     internal void ApplySettings(Config value)
     {
         bool logsChanged=!string.Equals(config.NicoJkLogFolder,value.NicoJkLogFolder,StringComparison.OrdinalIgnoreCase)
-            || config.CommentPreference!=value.CommentPreference;
+            || config.CommentPreference!=value.CommentPreference
+            || config.MatchExternalAssPrefix!=value.MatchExternalAssPrefix;
         config.CopyFrom(value);
         commentsMenu.Checked=config.CommentsVisible;
         foreach(var session in sessions.ToArray())session.ApplySettings(logsChanged);
@@ -91,7 +92,7 @@ public sealed class ResidentController : IDisposable
     MainWindow CreateSession()
     {
         idleCleanup.Stop();
-        var session=new MainWindow(config);session.Failure+=ReportFailure;session.SettingsRequested+=ShowPlayerSettings;session.InitializeHidden();sessions.Add(session);return session;
+        var session=new MainWindow(config);session.Failure+=ReportFailure;session.SettingsRequested+=ShowPlayerSettings;session.CommonSettingRequested+=SetPanelSetting;session.InitializeHidden();sessions.Add(session);return session;
     }
     void ReportFailure(string message)
     {
@@ -111,6 +112,7 @@ public sealed class ResidentController : IDisposable
         if(!sessions.Remove(session))return;
         session.Failure-=ReportFailure;
         session.SettingsRequested-=ShowPlayerSettings;
+        session.CommonSettingRequested-=SetPanelSetting;
         if(exits.Remove(session,out var subscription))subscription.Process.Exited-=subscription.Handler;
         session.ShutdownSession();ScheduleIdleCleanup();
     }
@@ -155,6 +157,19 @@ public sealed class ResidentController : IDisposable
         menu.Items.Add(commentsMenu);
         menu.Items.Add("設定",null,(_,_)=>ShowSettings());
         menu.Items.Add("終了",null,(_,_)=>Application.Current.Shutdown());
+    }
+    void SetPanelSetting(string name,bool value)
+    {
+        try
+        {
+            var candidate=config.Clone();
+            if(name=="master")candidate.CommentsVisible=value;else if(name=="auto")candidate.AutoFetchPastLogs=value;else return;
+            candidate.Save();ApplySettings(candidate);
+            // Do not overwrite an unrelated, not-yet-applied edit in the settings window.
+            if(name=="master")settings?.SetCommentsVisible(config.CommentsVisible);
+            else settings?.SetAutoPastLogs(config.AutoFetchPastLogs);
+        }
+        catch(Exception ex){ReportFailure("設定を保存できませんでした。\n"+ex.Message);}
     }
     public void Dispose()
     {

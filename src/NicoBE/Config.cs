@@ -6,32 +6,44 @@ namespace NicoBE;
 
 public sealed class Config
 {
-    public const double BaseFontSize = 48;
-    public const double BaseScrollPixelsPerSecond = 360;
-    public const double DefaultLineSpacingPercent = 30;
-    public const double DefaultScrollSpeedPercent = 100;
-    public const double MinScrollSpeedPercent = 50;
+    public const double BaseFontSize = CommentDisplayDefaults.FontSize;
+    public const double BaseScrollPixelsPerSecond = CommentDisplayDefaults.ScrollPixelsPerSecond;
+    public const double DefaultLineSpacingPercent = CommentDisplayDefaults.LineSpacingPercent;
+    public const double DefaultScrollSpeedPercent = CommentDisplayDefaults.ScrollSpeedPercent;
+    public const double MinScrollSpeedPercent = CommentDisplayDefaults.MinScrollSpeedPercent;
     public string NicoJkLogFolder { get; set; } = "";
-    public string FontFamily { get; set; } = "Yu Gothic UI";
-    public int FontWeight { get; set; } = 700;
+    public string FontFamily { get; set; } = CommentDisplayDefaults.FontFamily;
+    public int FontWeight { get; set; } = CommentDisplayDefaults.FontWeight;
+    public int OutlineLevel { get; set; } = CommentDisplayDefaults.OutlineLevel;
+    [JsonIgnore] public double OutlineWidth => CommentDisplayDefaults.OutlineWidth(OutlineLevel);
+    public int ShadowLevel { get; set; } = CommentDisplayDefaults.ShadowLevel;
+    [JsonIgnore] public double ShadowOffset => CommentDisplayDefaults.ShadowOffset(ShadowLevel);
     public bool CommentsVisible { get; set; } = true;
+    public bool AutoFetchPastLogs { get; set; } = true;
+    public bool MatchExternalAssPrefix { get; set; } = true;
     public string CommentPreference { get; set; } = "Original";
     public double FontSize { get; set; } = BaseFontSize;
     public double LineSpacingPercent { get; set; } = DefaultLineSpacingPercent;
     public double ScrollPixelsPerSecond { get; set; } = BaseScrollPixelsPerSecond * DefaultScrollSpeedPercent / 100;
-    public bool AccelerateLongComments { get; set; } = true;
-    public bool ColorEmoji { get; set; } = true;
+    public bool AccelerateLongComments { get; set; } = CommentDisplayDefaults.AccelerateLongComments;
+    public bool ColorEmoji { get; set; } = CommentDisplayDefaults.ColorEmoji;
     public bool PlaybackPanelVisible { get; set; } = true;
-    public double FixedCommentSeconds { get; set; } = 5;
-    public int MaxVisibleComments { get; set; } = 70;
-    public double Opacity { get; set; } = .95;
-    public double CommentOffsetSeconds { get; set; }
+    public bool KeepPlaybackSpeed { get; set; } = true;
+    public double FixedCommentSeconds { get; set; } = CommentDisplayDefaults.FixedCommentSeconds;
+    public int MaxVisibleComments { get; set; } = CommentDisplayDefaults.MaxVisibleComments;
+    public double Opacity { get; set; } = CommentDisplayDefaults.Opacity;
+    public double CommentOffsetSeconds { get; set; } = -CommentDisplayDefaults.AdvanceSeconds;
     public int PollIntervalMs { get; set; } = 100;
     public int? ServiceId { get; set; }
     public Dictionary<string, string> ChannelOverrides { get; set; } = new();
     public bool SetupCompleted {get;set;}
+    public bool FirstRunGuideAcknowledged {get;set;}
     public List<string> NgIds {get;set;} = new();
     public List<string> NgWords {get;set;} = new();
+    public bool NgColoredComments {get;set;}
+    public bool NgFixedComments {get;set;}
+    public bool NgSizeChangedComments {get;set;}
+    public bool NgMultilineComments {get;set;}
     [JsonIgnore] public bool IsReady=>Directory.Exists(NicoJkLogFolder);
     [JsonIgnore] public double FontSizePercent {get=>FontSize/BaseFontSize*100;set=>FontSize=BaseFontSize*value/100;}
     [JsonIgnore] public double ScrollSpeedPercent {get=>ScrollPixelsPerSecond/BaseScrollPixelsPerSecond*100;set=>ScrollPixelsPerSecond=BaseScrollPixelsPerSecond*value/100;}
@@ -52,6 +64,8 @@ public sealed class Config
         if(CommentPreference is not ("Original" or "ASS"))throw new Exception("コメントの優先形式が不正です。");
         if(string.IsNullOrWhiteSpace(FontFamily))throw new Exception("コメントのフォントを指定してください。");
         if(FontWeight is not (400 or 700 or 900))throw new Exception("文字の太さは400、700、900のいずれかを指定してください。");
+        if(OutlineLevel is <0 or >5)throw new Exception("縁取りの太さは0～5で指定してください。");
+        if(ShadowLevel is <0 or >5)throw new Exception("影の大きさは0～5で指定してください。");
         NgIds=NgFilter.Normalize(NgIds,StringComparer.Ordinal);
         NgWords=NgFilter.Normalize(NgWords,StringComparer.OrdinalIgnoreCase);
         if (requirePaths && !Directory.Exists(c.NicoJkLogFolder)) throw new Exception("NicoJKのログフォルダが見つかりません。");

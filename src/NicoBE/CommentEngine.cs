@@ -17,6 +17,7 @@ public sealed class CommentEngine
 {
     public const double Width=1920, Height=1080;
     private readonly Config config;
+    private Config sceneSettings;
     private NgFilter ng;
     private List<Comment> comments=new();
     private int cursor;
@@ -33,7 +34,7 @@ public sealed class CommentEngine
     // Adjust the extra space between rows; retain the text's own height.
     public double LaneHeight => config.FontSize*(1+config.LineSpacingPercent/100);
     public Func<Comment,(double Width,double Height,object? Visual)> Measure { get; set; }=c=>(c.Text.Split('\n').Max(l=>l.Length)*28d,(1+c.Text.Count(ch=>ch=='\n'))*Config.BaseFontSize*1.4,null);
-    public CommentEngine(Config config) {this.config=config;ng=new(config);}
+    public CommentEngine(Config config) {this.config=config;sceneSettings=config.Clone();ng=new(config);}
     public void Reset()
     {
         comments=new();cursor=0;Ready=false;anchored=false;Active.Clear();MediaPosition=0;
@@ -45,6 +46,11 @@ public sealed class CommentEngine
         // Loading can finish after playback has already advanced. Reconstruct
         // the same recent history as a seek, regardless of notification order.
         if(anchored)RestoreHistory();
+    }
+    // API snapshots may add old comments. Preserve the scene and skip late arrivals until a seek.
+    public void UpdateComments(IReadOnlyList<Comment> value)
+    {
+        comments=value.ToList();Ready=true;cursor=LowerBound(MediaPosition+0.000001);
     }
     public int CommentCount=>comments.Count;
     public void AppendComments(IReadOnlyList<Comment> added)
@@ -95,7 +101,24 @@ public sealed class CommentEngine
         Tick(wall);MediaPosition=media;lastResponse=wall;Active.Clear();anchored=true;SeekGeneration++;
         if(Ready)RestoreHistory();else cursor=LowerBound(media);
     }
-    public void RefreshSettings(){ng=new(config);RestoreHistory();}
+    public void RefreshSettings(bool force=false)
+    {
+        // Reconstructing from media time changes the age of comments that have
+        // been moving in wall time, especially at non-1x playback speeds.
+        // Keep the active scene (including glyph IDs and lanes) on a no-op apply.
+        if(!force && SameSceneSettings(sceneSettings,config))return;
+        sceneSettings=config.Clone();ng=new(config);RestoreHistory();
+    }
+    private static bool SameSceneSettings(Config a,Config b)=>
+        string.Equals(a.FontFamily,b.FontFamily,StringComparison.OrdinalIgnoreCase)
+        && a.FontWeight==b.FontWeight && a.FontSize==b.FontSize
+        && a.OutlineLevel==b.OutlineLevel && a.ShadowLevel==b.ShadowLevel && a.ColorEmoji==b.ColorEmoji
+        && a.LineSpacingPercent==b.LineSpacingPercent && a.ScrollPixelsPerSecond==b.ScrollPixelsPerSecond
+        && a.AccelerateLongComments==b.AccelerateLongComments && a.FixedCommentSeconds==b.FixedCommentSeconds
+        && a.CommentOffsetSeconds==b.CommentOffsetSeconds && a.MaxVisibleComments==b.MaxVisibleComments
+        && a.NgColoredComments==b.NgColoredComments && a.NgFixedComments==b.NgFixedComments
+        && a.NgSizeChangedComments==b.NgSizeChangedComments && a.NgMultilineComments==b.NgMultilineComments
+        && a.NgIds.SequenceEqual(b.NgIds) && a.NgWords.SequenceEqual(b.NgWords);
     public IReadOnlyList<NgLogRow> NearbyComments(double position)
     {
         var rows=new List<NgLogRow>();

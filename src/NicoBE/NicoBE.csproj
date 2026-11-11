@@ -16,6 +16,7 @@
     <RestoreSources></RestoreSources>
   </PropertyGroup>
   <ItemGroup><Using Remove="System.Windows.Forms"/><Using Remove="System.Drawing"/></ItemGroup>
+  <ItemGroup><Compile Include="..\Shared\*.cs" Link="Shared\%(Filename)%(Extension)"/></ItemGroup>
   <ItemGroup>
     <Content Include="..\NicoBE.Mkv\runtime\NicoBE.Mkv.dll;..\NicoBE.Mkv\runtime\avformat-63.dll;..\NicoBE.Mkv\runtime\avcodec-63.dll;..\NicoBE.Mkv\runtime\avutil-61.dll;..\NicoBE.Mkv\runtime\FFmpeg-LGPL-2.1.txt;..\NicoBE.Mkv\runtime\zlib-LICENSE.txt"
              Link="mkv\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest"/>

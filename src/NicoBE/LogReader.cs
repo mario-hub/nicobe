@@ -9,7 +9,8 @@ namespace NicoBE;
 
 public enum CommentPosition { Scroll, Top, Bottom }
 public sealed class CommentLogUnavailableException(string message) : Exception(message);
-public sealed record Comment(double MediaSeconds, string Text, string Color, double SizeScale, CommentPosition Position, string UserId="");
+public sealed record Comment(double MediaSeconds, string Text, string Color, double SizeScale, CommentPosition Position, string UserId="")
+{ public SourceComment? Original {get;init;} }
 public sealed record PreparedComments(RecordingInfo Recording, string Channel, List<Comment> Comments, int Files, int Malformed)
 {
     public AssSubtitle? Subtitle { get; init; }
@@ -23,13 +24,13 @@ public static class LogReader
         RecordingInfo info;
         if(Path.GetExtension(path).Equals(".mp4",StringComparison.OrdinalIgnoreCase))
         {
-            if(config.CommentPreference=="ASS" && ContainerComments.External(path,token) is {} preferred)return preferred;
+            if(config.CommentPreference=="ASS" && ContainerComments.External(path,token,config.MatchExternalAssPrefix) is {} preferred)return preferred;
             var embedded=Mp4CommentData.TryRead(path,token);
-            if(embedded==null && ContainerComments.External(path,token) is {} external)return external;
+            if(embedded==null && ContainerComments.External(path,token,config.MatchExternalAssPrefix) is {} external)return external;
             if(embedded!=null)
             {
                 AssSubtitle? subtitle=null;
-                try{subtitle=ContainerComments.External(path,token)?.Subtitle;}
+                try{subtitle=ContainerComments.External(path,token,config.MatchExternalAssPrefix)?.Subtitle;}
                 catch(Exception error) when(error is IOException or UnauthorizedAccessException) { }
                 var rendered=embedded.ForPlayback();
                 double duration=rendered.Count==0?1:rendered[^1].MediaSeconds+30;
@@ -138,7 +139,7 @@ public static class LogReader
         var position=mail.Contains("ue")?CommentPosition.Top:mail.Contains("shita")?CommentPosition.Bottom:CommentPosition.Scroll;
         double size=mail.Contains("big")?1.3:mail.Contains("small")?.8:1;
         string color=mail.FirstOrDefault(t=>Colors.ContainsKey(t) || System.Text.RegularExpressions.Regex.IsMatch(t,@"\A#[0-9a-fA-F]{6}\z"))??"white";
-        return new(original.MediaSeconds,text,Colors.GetValueOrDefault(color,color),size,position,attributes.GetValueOrDefault("user_id")??"");
+        return new(original.MediaSeconds,text,Colors.GetValueOrDefault(color,color),size,position,attributes.GetValueOrDefault("user_id")??"") {Original=original};
     }
     private static readonly Dictionary<string,string> Colors = new(StringComparer.OrdinalIgnoreCase)
     {
