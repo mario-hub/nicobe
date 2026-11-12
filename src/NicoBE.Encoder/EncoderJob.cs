@@ -6,7 +6,10 @@ using System.Text.Json;
 
 namespace NicoBE.Encoder;
 
-public sealed record EncodeProgress(string Stage,double Fraction,string Detail);
+public sealed record EncodeProgress(string Stage,double Fraction,string Detail)
+{
+    public string? Command {get;init;}
+}
 public sealed record EncodeResult(string Output,string Log,Mp4RecordingMetadata Metadata)
 {
     public IReadOnlyList<string> Warnings {get;init;}=Array.Empty<string>();
@@ -92,6 +95,7 @@ public static class EncoderJob
         }
         args.AddRange(new[]{"-threads:v","8"});
         if(s.Backend=="CPU" && s.Codec=="H265")args.AddRange(new[]{"-x265-params","pools=8:frame-threads=2"});
+        ExtraVideoArguments.Apply(args,s);
         string filter=s.Deinterlace=="Off"?"":$"bwdif=mode={(s.FrameRate==60?"send_field":"send_frame")}:parity=auto:deint={(s.Deinterlace=="On"?"all":"interlaced")},";
         // Resample on the source timeline. Output CFR sync would pad frames back
         // to zero and invalidate the first-frame correspondence used for comments.
@@ -132,17 +136,29 @@ public static class EncoderJob
     internal static async Task RunPass(EncoderSettings settings,List<string> args,string log,double duration,IProgress<EncodeProgress> progress,CancellationToken token,int index,int count,Func<TextWriter>? openLog=null)
     {
         string stage=count==2?$"{index}/2パス":settings.Backend=="NVENC" && settings.Passes==2?"エンコード中（NVENC 2パス）":"エンコード中";
-        progress.Report(new(stage,(double)(index-1)/count,"処理を開始しています"));
+        progress.Report(new(stage,(double)(index-1)/count,"処理を開始しています") {Command=ExtraVideoArguments.Command(settings.Ffmpeg,args)});
         await File.AppendAllTextAsync(log,$"\n{stage} Arguments: "+JsonSerializer.Serialize(args)+"\n",token);
         token.ThrowIfCancellationRequested();
         using var p=Process.Start(StartInfo(settings.Ffmpeg,args))??throw new Exception("FFmpegを起動できません。");
         using var cancel=token.Register(()=>Kill(p));
+        var firstErrors=new List<string>();var recentErrors=new Queue<string>();string? unusedOption=null;
         var errors=Task.Run(async()=>
         {
             try
             {
                 await using var writer=openLog?.Invoke()??new StreamWriter(log,true,Encoding.UTF8);
-                while(await p.StandardError.ReadLineAsync() is {} line)await writer.WriteLineAsync(line);
+                while(await p.StandardError.ReadLineAsync() is {} line)
+                {
+                    await writer.WriteLineAsync(line);
+                    if(!string.IsNullOrWhiteSpace(line))
+                    {
+                        string summary=line[..Math.Min(line.Length,1000)];if(firstErrors.Count<8)firstErrors.Add(summary);
+                        recentErrors.Enqueue(summary);if(recentErrors.Count>8)recentErrors.Dequeue();
+                    }
+                    if(ExtraVideoArguments.Active(settings) && (line.Contains("has not been used for any stream",StringComparison.OrdinalIgnoreCase)
+                        || line.Contains("Unknown option",StringComparison.OrdinalIgnoreCase) || line.Contains("Error parsing option",StringComparison.OrdinalIgnoreCase)))
+                    {unusedOption=line;Kill(p);}
+                }
             }
             catch(Exception ex) when(ex is IOException or UnauthorizedAccessException)
             {throw new IOException("処理ログの読み書きに失敗したため、エンコードを停止しました。\nログ: "+log,ex);}
@@ -161,7 +177,8 @@ public static class EncoderJob
             if(key=="progress")progress.Report(new(stage,(index-1+fraction)/count,$"{fraction:P0}　速度 {speed}"));
         }
         await p.WaitForExitAsync();await errors;token.ThrowIfCancellationRequested();
-        if(p.ExitCode!=0)throw new Exception($"{stage}に失敗しました（終了コード {p.ExitCode}）。\nログ: {log}");
+        if(unusedOption!=null)throw new Exception("FFmpegが追加指定を適用できませんでした。\n"+unusedOption+"\nログ: "+log);
+        if(p.ExitCode!=0)throw new Exception($"{stage}に失敗しました（終了コード {p.ExitCode}）。\n"+string.Join("\n",firstErrors.Concat(recentErrors).Distinct())+$"\nログ: {log}");
         }
         finally
         {

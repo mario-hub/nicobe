@@ -18,6 +18,7 @@ internal static class Program
         ファイル名指定: 拡張子を保存形式として優先。既存動画・同名ASSは上書きしません。
         相対パス: 引数はカレントディレクトリ基準、JSON内はそのJSONのフォルダ基準。
         設定ファイルは変更しません。FFmpegやコメントログは事前に設定してください。
+        FFmpeg追加指定: JSONのExtraVideoArgumentsEnabledとExtraVideoArguments（GUIと共通）。
         --help / -h: ヘルプ    --version: バージョン    --: 以降をパスとして扱う
         Ctrl+C: 中止。進捗・警告・エラーは標準エラー、完了結果は標準出力。
         終了コード: 0=成功（警告を含む）、1=処理失敗、2=引数・設定不備、130=中止

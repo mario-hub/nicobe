@@ -6,6 +6,8 @@
 
 | 項目 | 確認内容 |
 | --- | --- |
+| Encoder追加パラメータ | `encoder-extra-arguments`：引用符・改行、許可項目／管理項目の拒否、重複置換、x264/x265キー統合、CPU両パス、GPU自動切り替えの抑止、JSONとGUIの保持。`cli-arguments`でも設定読み込みを確認 |
+| Encoder追加指定の実エンコード | `encoder-extra-arguments-media`：合成TSのCPU 2パスで最大ビットレート・Bフレームなどを指定し、両工程の引数と出力を検査。不正なプリセット指定時にFFmpegの診断が呼び出し元へ届くことも確認 |
 | 実行基盤 | 非ゼロ終了、両出力ストリームの排出、タイムアウト。各テストをJob Objectに所属させ、終了時にその子プロセスも回収 |
 | ビルド | NicoBE・GPU DLL、Encoder・CLIの隔離Releaseビルド。MKV DLLは既存の配布用DLLを使用 |
 | NicoBE | コメント配置・NG・速度継承、ASS認識・サイズ換算、追っかけログ更新、過去ログの模擬通信・キャッシュ、保存先、エラー処理 |

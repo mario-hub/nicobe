@@ -30,6 +30,7 @@ internal static class EncoderCapabilities
         if(!NeedsProbe(settings.Codec,settings.Backend))return false;
         bool available=await GpuAvailable(settings.Ffmpeg,settings.Codec,settings.Backend).WaitAsync(token);
         if(available)return false;
+        if(ExtraVideoArguments.Active(settings))throw new Exception(settings.Backend+"を利用できません。追加パラメータが有効なため、CPUへ自動変更しません。処理方式と追加指定を確認してください。");
         settings.Backend="CPU";
         settings.Quality=Math.Clamp(settings.Quality,EncoderSettings.QualityMinimum(settings.Codec,settings.Backend),EncoderSettings.QualityMaximum(settings.Codec,settings.Backend));
         if(settings.RateControl!="Bitrate")settings.Passes=1;

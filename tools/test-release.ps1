@@ -124,7 +124,7 @@ try {
         foreach($test in @(
             @('failure','logs/failure-test.json'),@('storage','logs/storage-test.json'),@('pipe','logs/pipe-failure-test.json'),
             @('installer','temp/test-results/installer-test.json'),@('comment-format','temp/test-results/comment-format/result.json'),
-            @('ass-style','logs/ass-style-test.json'),@('ui','temp/test-results/encoder-ui-checks.json'),@('guide','temp/test-results/encoder-guide-test.json'))){
+            @('ass-style','logs/ass-style-test.json'),@('extra-arguments','logs/extra-arguments-test.json'),@('ui','temp/test-results/encoder-ui-checks.json'),@('guide','temp/test-results/encoder-guide-test.json'))){
             App-Test ('encoder-'+$test[0]) $encoderBuild 'NicoBE.Encoder.exe' ('--'+$test[0]+'-test') $test[1]
         }
         App-Test 'cli-arguments' $encoderBuild 'NicoBE.Encoder.Cli.exe' '--self-test' ''
@@ -169,6 +169,7 @@ try {
     }
     if($mediaReady){
         App-Test 'encoder-interruption' $encoderBuild 'NicoBE.Encoder.exe' '--encode-interruption-test' 'logs/encode-interruption-test.json' @($fixture) 180
+        App-Test 'encoder-extra-arguments-media' $encoderBuild 'NicoBE.Encoder.exe' '--extra-arguments-media-test' 'logs/extra-arguments-media-test.json' @($fixture) 120
         App-Test 'encoder-formats' $encoderBuild 'NicoBE.Encoder.exe' '--format-test' 'temp/test-results/format-test.json' @($fixture) 600
         App-Test 'encoder-no-comments' $encoderBuild 'NicoBE.Encoder.exe' '--no-comments-test' 'temp/test-results/no-comments/result.json' @($fixture) 180
         App-Test 'encoder-audio' $encoderBuild 'NicoBE.Encoder.exe' '--audio-test' 'temp/test-results/audio-test/checks.json' @() 180
@@ -190,7 +191,7 @@ try {
             $probe=Get-Content (Join-Path $dir 'probe.stdout.log') -Raw -Encoding UTF8 | ConvertFrom-Json
             if(!($probe.streams | Where-Object codec_name -eq 'hevc')){throw 'CLI did not encode HEVC'}
         }
-    }else{foreach($id in @('encoder-interruption','encoder-formats','encoder-no-comments','encoder-audio','encoder-av1','cli-real-encode')){Row $id 'SKIP' 'Synthetic-media prerequisites not available'}}
+    }else{foreach($id in @('encoder-interruption','encoder-extra-arguments-media','encoder-formats','encoder-no-comments','encoder-audio','encoder-av1','cli-real-encode')){Row $id 'SKIP' 'Synthetic-media prerequisites not available'}}
     if($playerOk -and $encoderOk){$null=Test-Case 'release-package' {
         Invoke-Child $ps @('-NoProfile','-ExecutionPolicy','Bypass','-File',(Join-Path $PSScriptRoot 'test-release-package.ps1'),'-PlayerBuild',$playerBuild,'-EncoderBuild',$encoderBuild,'-OutputDirectory',(Join-Path $run 'packages')) $root (Join-Path $run 'packages') 120
         if((Get-Content (Join-Path $run 'packages/result.json') -Raw -Encoding UTF8 | ConvertFrom-Json).passed -ne $true){throw 'Package validation failed'}

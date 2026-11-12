@@ -45,6 +45,7 @@ public sealed class EncoderWindow : Window
     FrameworkElement? qualityField,bitrateField;
     readonly Slider quality=new() {Minimum=0,Maximum=51,TickFrequency=1,IsSnapToTickEnabled=true,SmallChange=1,LargeChange=5};
     readonly AssStylePanel assStyle=new();
+    readonly ExtraVideoArgumentsPanel extraArguments;
     readonly TextBox bitrate=new() {Height=36},ffmpeg=new() {Height=36};
     readonly TextBox status=SelectableText("TSファイルを追加、またはこの画面へドロップしてください。"),detail=SelectableText("");
     readonly TextBox errorText=SelectableText("",new SolidColorBrush(Color.FromRgb(255,171,166)));
@@ -137,6 +138,7 @@ public sealed class EncoderWindow : Window
         externalAss.ToolTip="動画と同名の.assファイルを同じフォルダに保存します。埋め込みとは独立して選べます。";
         var assNote=Note("文字サイズなどは「ASS書式設定」で変更できます。");assNote.Margin=new Thickness(0,6,0,14);comments.Children.Add(assNote);
         settingsPanel.Children.Add(Pair(Section("音声",sound),Section("コメント",comments)));
+        extraArguments=new ExtraVideoArgumentsPanel(ReadSettings,this);settingsPanel.Children.Add(Section("FFmpeg追加パラメータ",extraArguments,collapsible:true));
         basicPanel.Children.Add(PathSection("保存先","エンコードした動画を保存するフォルダ。同名のファイルには連番を付けます。",FolderField(outputFolder,"動画の出力先を選択")));
         commentPathRow=FolderField(logFolder,"コメント埋め込み用のNicoJKログフォルダを選択");
         basicPanel.Children.Add(PathSection("コメントログ","NicoJKのjk1、jk4などを含む親フォルダ。コメントを保存する場合に使用します。",commentPathRow));
@@ -195,6 +197,7 @@ public sealed class EncoderWindow : Window
         frameRate.SelectedValue=s.FrameRate.ToString(CultureInfo.InvariantCulture);outputFolder.Text=s.OutputFolder;logFolder.Text=s.NicoJkLogFolder;embed.IsChecked=s.EmbedComments;
         passes.SelectedValue=s.Passes.ToString(CultureInfo.InvariantCulture);container.SelectedValue=s.Container;assStyle.Load(s.AssStyle);externalAss.IsChecked=s.SaveExternalAss;
         pastLogs.IsChecked=s.UsePastLogComments;
+        extraArguments.Load(s);
         UpdateQualityRange();UpdateRateControls();UpdateEmbedControls();
     }
     void UpdateEmbedControls()
@@ -211,7 +214,11 @@ public sealed class EncoderWindow : Window
         if(!File.Exists(path))return; // Check after FFmpeg has been configured.
         bool available=await EncoderCapabilities.GpuAvailable(path,selectedCodec,selectedBackend);
         if(!available && cancellation==null && path==ffmpeg.Text.Trim().Trim('"') && selectedCodec==(string?)codec.SelectedValue && (string?)backend.SelectedValue==selectedBackend)
-        {backend.SelectedValue="CPU";status.Text=$"{selectedCodec}の{selectedBackend}を利用できないため、処理方式をCPUに変更しました。";}
+        {
+            if(extraArguments.EnabledSwitch.IsChecked==true && !string.IsNullOrWhiteSpace(extraArguments.Input.Text))
+            {status.Text=$"{selectedCodec}の{selectedBackend}を利用できません。追加パラメータが有効なため、処理方式を自動変更しません。";return;}
+            backend.SelectedValue="CPU";status.Text=$"{selectedCodec}の{selectedBackend}を利用できないため、処理方式をCPUに変更しました。";
+        }
     }
     void UpdateQualityRange()
     {
@@ -292,10 +299,11 @@ public sealed class EncoderWindow : Window
         {if((string?)rate.SelectedValue=="Bitrate")throw new Exception("ビットレートを数値で入力してください。");mbps=1.5;}
         if((string?)rate.SelectedValue=="Quality" && (!double.IsFinite(mbps)||mbps<.5||mbps>100))mbps=1.5;
         int width=int.Parse((string)resolution.SelectedValue,CultureInfo.InvariantCulture);
-        return new() {Ffmpeg=ffmpeg.Text.Trim().Trim('"'),FfmpegGuideAcknowledged=ffmpegGuideAcknowledged,Codec=(string)codec.SelectedValue,Backend=(string)backend.SelectedValue,Width=width,Height=width*9/16,
+        var settings=new EncoderSettings {Ffmpeg=ffmpeg.Text.Trim().Trim('"'),FfmpegGuideAcknowledged=ffmpegGuideAcknowledged,Codec=(string)codec.SelectedValue,Backend=(string)backend.SelectedValue,Width=width,Height=width*9/16,
             RateControl=(string)rate.SelectedValue,Quality=(int)quality.Value,BitrateMbps=mbps,Speed=(string)speed.SelectedValue,Deinterlace=(string)deinterlace.SelectedValue,Audio=(string)audio.SelectedValue,
             Passes=int.Parse((string)passes.SelectedValue,CultureInfo.InvariantCulture),Container=(string)container.SelectedValue,AssStyle=assStyle.Read(),
             FrameRate=int.Parse((string)frameRate.SelectedValue,CultureInfo.InvariantCulture),OutputFolder=outputFolder.Text.Trim().Trim('"'),NicoJkLogFolder=logFolder.Text.Trim().Trim('"'),EmbedComments=embed.IsChecked==true,SaveExternalAss=externalAss.IsChecked==true,UsePastLogComments=pastLogs.IsChecked==true};
+        extraArguments.Store(settings);return settings;
     }
     async Task Encode()
     {
@@ -314,7 +322,7 @@ public sealed class EncoderWindow : Window
             {
                 if(cancellation.IsCancellationRequested)break;
                 item.Error="";bool itemFinished=false;
-                var reporter=new Progress<EncodeProgress>(p=>{if(itemFinished)return;item.State=p.Stage;status.Text=$"{Array.IndexOf(pending,item)+1}/{pending.Length}　{p.Stage} — {item.Name}";detail.Text=p.Detail;progress.Value=p.Fraction;});
+                var reporter=new Progress<EncodeProgress>(p=>{if(itemFinished)return;if(p.Command!=null)extraArguments.LastCommand=p.Command;item.State=p.Stage;status.Text=$"{Array.IndexOf(pending,item)+1}/{pending.Length}　{p.Stage} — {item.Name}";detail.Text=p.Detail;progress.Value=p.Fraction;});
                 try
                 {
                     var result=await RunJob(item.Path,settings,reporter,cancellation.Token);itemFinished=true;item.State="完了";completed++;queue.Remove(item);detail.Text="保存先: "+result.Output;
@@ -355,9 +363,19 @@ public sealed class EncoderWindow : Window
         var panel=new StackPanel {Margin=new Thickness(0,0,0,14)};
         panel.Children.Add(new TextBlock {Text=label,FontWeight=FontWeights.SemiBold,Margin=new Thickness(0,0,0,7)});panel.Children.Add(control);return panel;
     }
-    static FrameworkElement Section(string title,UIElement content)
+    static FrameworkElement Section(string title,UIElement content,bool collapsible=false)
     {
-        var panel=new StackPanel();panel.Children.Add(new TextBlock {Text=title,FontSize=20,FontWeight=FontWeights.SemiBold,Margin=new Thickness(0,0,0,16)});panel.Children.Add(content);
+        var panel=new StackPanel();
+        var heading=new TextBlock {Text=title,FontSize=20,FontWeight=FontWeights.SemiBold,Margin=new Thickness(0,0,0,16)};
+        if(collapsible)
+        {
+            content.Visibility=Visibility.Collapsed;
+            var row=new DockPanel();var toggle=new Button {Content="開く ▼",FontSize=14,MinWidth=80,Padding=new Thickness(10,2,10,2),Margin=new Thickness(12,0,0,12),VerticalAlignment=VerticalAlignment.Top,ToolTip=title+"の内容を開く／閉じる"};
+            toggle.Click+=(_,_)=>{bool open=content.Visibility!=Visibility.Visible;content.Visibility=open?Visibility.Visible:Visibility.Collapsed;toggle.Content=open?"閉じる ▲":"開く ▼";};
+            DockPanel.SetDock(toggle,Dock.Right);row.Children.Add(toggle);row.Children.Add(heading);panel.Children.Add(row);
+        }
+        else panel.Children.Add(heading);
+        panel.Children.Add(content);
         var border=new Border {Child=panel,BorderBrush=SettingsTheme.Line,BorderThickness=new Thickness(1),CornerRadius=new CornerRadius(6),Padding=new Thickness(16,14,16,2)};
         border.SetResourceReference(BackgroundProperty,"SurfaceBrush");return border;
     }

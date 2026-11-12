@@ -38,6 +38,8 @@ public sealed class EncoderSettings
     public string Deinterlace {get;set;}="Auto";
     public string Audio {get;set;}="AAC128";
     public int FrameRate {get;set;}=60;
+    public bool ExtraVideoArgumentsEnabled {get;set;}
+    public string ExtraVideoArguments {get;set;}="";
     public string OutputFolder {get;set;}=EncoderPaths.Output;
     public bool EmbedComments {get;set;}=true;
     public bool SaveExternalAss {get;set;}=false;
@@ -82,6 +84,8 @@ public sealed class EncoderSettings
     {
         if(AssStyle==null)throw new Exception("ASSの表示設定がありません。");
         AssStyle.Validate();
+        ExtraVideoArguments??="";
+        NicoBE.Encoder.ExtraVideoArguments.Parse(this);
         if(requireFiles && (!File.Exists(Ffmpeg)||!File.Exists(Ffprobe)))throw new Exception("同じフォルダにffmpeg.exeとffprobe.exeがある場所を指定してください。");
         if(string.IsNullOrWhiteSpace(OutputFolder)||!Path.IsPathFullyQualified(OutputFolder))throw new Exception("出力先を絶対パスで指定してください。");
         if(Passes is not (1 or 2))throw new Exception("パス数は1または2を指定してください。");

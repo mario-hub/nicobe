@@ -19,12 +19,14 @@ internal static class CliTest
             File.WriteAllText(Path.Combine(root,"tools","ffprobe.exe"),"fixture; not an executable");
             var settings=new EncoderSettings {Ffmpeg="tools/ffmpeg.exe",OutputFolder="output",Backend="CPU",EmbedComments=false,NicoJkLogFolder="logs"};
             settings.AssStyle=new(){FontFamily="Arial",FontWeight=900,FontSizePercent=150,ScrollSpeedPercent=125,LineSpacingPercent=25,OutlineLevel=4,ShadowLevel=5,OpacityPercent=80,FixedCommentSeconds=7,AdvanceSeconds=1.5,MaxVisibleComments=90,AccelerateLongComments=false};
+            settings.ExtraVideoArgumentsEnabled=true;settings.ExtraVideoArguments="-maxrate:v 6M\n-bf:v 3";
             string original=JsonSerializer.Serialize(settings,EncoderSettings.Json);File.WriteAllText(profile,original);
             void Check(bool value,string message){if(!value)throw new Exception(message);}
             void Reject(Action action,string message){bool failed=false;try{action();}catch{failed=true;}Check(failed,message);}
             var parsed=CliRequest.Parse(new[]{input,"--settings",profile});
             var prepared=parsed.Prepare();
             Check(prepared.Input==input && prepared.OutputFile==null,"input / omitted output");
+            Check(prepared.Settings.ExtraVideoArgumentsEnabled && prepared.Settings.ExtraVideoArguments==settings.ExtraVideoArguments,"CLI preserves extra FFmpeg settings");
             Check(JsonSerializer.Serialize(prepared.Settings.AssStyle)==JsonSerializer.Serialize(settings.AssStyle),"CLI preserves all ASS style settings from the profile");
             Check(prepared.Settings.OutputFolder==Path.Combine(root,"output"),"profile-relative output");
             Check(prepared.Settings.Ffmpeg==Path.Combine(root,"tools","ffmpeg.exe"),"profile-relative ffmpeg");
