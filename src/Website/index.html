@@ -191,6 +191,15 @@
 #download .downloads .download-link{display:flex;align-items:center;justify-content:center;position:relative;gap:16px;padding:12px 17px;min-height:48px;width:100%;background:#20565e;border:1px solid #3f858e;border-radius:6px;color:#e9fcff;font-size:16px;font-weight:600;text-decoration:none;transition:background-color .15s,border-color .15s}
 #download .downloads .download-link::after{content:'';position:absolute;right:17px;width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-top:6px solid currentColor;flex-shrink:0}
 #download .downloads .download-link:hover{background:#296873;border-color:#71c7cf}
+#download .downloads .download-link:active{transform:translateY(2px) scale(.985);background:#347f89}
+#download .downloads .download-link.has-feedback{display:grid;grid-template-columns:minmax(0,1fr);text-align:center;line-height:1.4}
+#download .download-link.has-feedback>span{grid-area:1/1;min-width:0;overflow-wrap:anywhere}
+#download .download-feedback{visibility:hidden}
+#download .downloads .download-link.is-requested{background:#347f89;border-color:#8ad9df;animation:download-press .18s ease-out}
+#download .download-link.is-requested .download-label{visibility:hidden}
+#download .download-link.is-requested .download-feedback{visibility:visible}
+#download .downloads .download-link.is-requested::after{visibility:hidden}
+@keyframes download-press{from{transform:translateY(2px) scale(.985)}to{transform:none}}
 #download>.note{font-size:14px;line-height:1.8;color:#b9c4cc;margin:18px 0 28px;padding:0 2px}
 #download a{color:#9ee2e5;text-decoration-color:#577d80}
 #download .requirements{padding:16px 20px;border:1px solid #353e45;border-radius:10px;background:#1d2327;line-height:1.6}
@@ -220,7 +229,7 @@
  #download .downloads tr{padding:20px}#download .downloads tbody th{font-size:22px}
  #download .downloads td:last-child{padding-top:20px}#download .requirements{padding:14px 16px}
 }
-@media(prefers-reduced-motion:reduce){#download .downloads .download-link{transition:none}}
+@media(prefers-reduced-motion:reduce){#download .downloads .download-link,#download .downloads .download-link.is-requested,#download .downloads .download-link:active{transition:none;animation:none;transform:none}}
 @media print{
  .site-header{padding-top:0}.site-header nav{display:none}
  #download .downloads tr,#download .requirements{background:white;color:#111;border-color:#aaa}
@@ -556,6 +565,7 @@
 
 <section id="faq">
 <div class="section-heading"><span class="section-number" aria-hidden="true">05</span><h2>よくある質問</h2></div>
+<details><summary>操作パネルに「読取失敗」と出る</summary><div class="detail-body"><p>動画の情報を読み込めなかった状態です。表示にマウスを重ねると原因を確認できます。MP4末尾の小さな数字列は読み取り時だけ無視しますが、途中のサイズ不整合や欠損はエラーにします。元ファイルは変更しません。</p><p>同期情報がない動画では、過去ログ取得が「対象外」になります。</p></div></details>
 <details><summary>DTV・TS抜きの録画環境で使える？</summary><div class="detail-body"><p>録画済みのMPEG-TSと、放送日時・放送局が対応するNicoJK形式の実況ログがあれば使えます。EDCBのNicojCatchで保存した同形式のログも対象です。NicoBE自体はテレビの受信・録画を行いません。コメントは保存ログのほか、過去ログAPIからも取得できます。</p></div></details>
 <details><summary>起動できない</summary><div class="detail-body"><p>「.NETが必要」と表示される場合は、<a href="https://aka.ms/dotnet/10.0/windowsdesktop-runtime-win-x64.exe?utm_source=chatgpt.com">.NET 10 Desktop Runtime（Windows x64）</a>を導入してください。ZIPはフォルダごと展開し、同梱DLLも一緒に配置します。</p><p>保存先のエラーは、表示されたフォルダのアクセス権と空き容量を確認してください。Windowsの保護機能で起動が止まる場合は、入手元と表示された警告内容を確認し、解決できなければお問い合わせください。</p></div></details>
 <details><summary>エラーの確認・不具合の報告</summary><div class="detail-body"><p>NicoBEの読み込み・描画エラーはトレイで通知します。通知をクリックするか、設定の「診断」を開くと、直近20件を確認・コピーできます。GPU描画は自動復旧を試み、復旧できない場合に通知します。カクつきの調査に使う画面の更新頻度・目標FPS・送信FPS・送信間隔はログに記録します。送信値はPresentの成功を計測したもので、画面上の実表示の測定ではありません。</p><p>Encoderでは操作タブの結果とログを確認します。<a href="https://docs.google.com/forms/d/e/1FAIpQLScLrY7nKGfU2TeV2BOhc6yy_lWtxwzR2n3J_XTFFovaTSqbPA/viewform">お問い合わせ</a>には、アプリ・Windows・MPC-BEのバージョン、操作手順、エラー内容を添えてください。ログや設定を共有するときは、ユーザー名・ファイル名・NG設定などを確認してください。</p></div></details>
@@ -579,5 +589,35 @@
 </div>
 
 </main>
+<script id="download-feedback">
+(() => {
+  document.querySelectorAll('a.download-link[download]').forEach(button => {
+    const label = document.createElement('span');
+    label.className = 'download-label';
+    label.textContent = button.textContent;
+    const feedback = document.createElement('span');
+    feedback.className = 'download-feedback';
+    feedback.textContent = '✓ ダウンロードをリクエストしました';
+    feedback.setAttribute('aria-hidden', 'true');
+    button.replaceChildren(label, feedback);
+    button.classList.add('has-feedback');
+    button.setAttribute('aria-live', 'polite');
+    button.setAttribute('aria-atomic', 'true');
+    let resetTimer;
+    button.addEventListener('click', event => {
+      if (event.defaultPrevented || event.button !== 0) return;
+      clearTimeout(resetTimer);
+      button.classList.add('is-requested');
+      label.setAttribute('aria-hidden', 'true');
+      feedback.setAttribute('aria-hidden', 'false');
+      resetTimer = setTimeout(() => {
+        button.classList.remove('is-requested');
+        label.removeAttribute('aria-hidden');
+        feedback.setAttribute('aria-hidden', 'true');
+      }, 1500);
+    });
+  });
+})();
+</script>
 </body>
 </html>

@@ -291,7 +291,7 @@ internal sealed class PlaybackCommentSession:IDisposable
     {
         if(disposed)return;
         bool eligible=context?.Eligible==true,waiting=nextUtc>DateTimeOffset.UtcNow;
-        string text=context==null?"確認中":!eligible?"対象外":busy?"取得中…":warning!=null?"取得失敗":
+        string text=context==null?(warning!=null?"読取失敗":"確認中"):!eligible?"対象外":busy?"取得中…":warning!=null?"取得失敗":
             past?.Stable==true?(PastAvailable?"取得済み":"コメントなし"):past?.Complete==true?(PastAvailable?"取得済み（更新待ち）":"コメントなし（更新待ち）"):
             past?.ContiguousEnd>past?.Range.Start?DateTimeOffset.FromUnixTimeMilliseconds(past!.ContiguousEnd/1000).ToLocalTime().ToString("MM/dd HH:mm")+"まで取得済み":past?.Coverage.Count>0?"一部取得済み":"未取得";
         if(waiting&&!busy&&eligible)text+=" · 再取得待ち";

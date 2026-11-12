@@ -80,6 +80,12 @@ internal static class PlaybackLifecycleTest
             int before=publications;second.Dispose();Wait(fetch2);Wait(exited.Task);
             Wait(Dispatcher.CurrentDispatcher.InvokeAsync(()=>{},DispatcherPriority.ApplicationIdle).Task);
             Check(publications==before,"Closing last player cancels API and suppresses all late UI updates");
+            PanelCommentState? failedState=null;
+            using var failed=new PlaybackCommentSession("invalid.mp4",new(),(_,_,_)=>{},s=>failedState=s,_=>{},service,
+                loadContext:(_,_,_)=>throw new InvalidDataException("MP4のサイズが不正です。"));
+            Wait(failed.StartAsync());
+            Check(failedState is {Status:"読取失敗",CanFetch:false,Busy:false}&&failedState.Detail.Contains("MP4のサイズが不正"),
+                "Initial read failure shows short failure status and error detail, not checking forever");
             Paths.WriteJson("playback-lifecycle-test.json",new{passed=true,checks});return 0;
         }
         catch(Exception ex){Paths.WriteJson("playback-lifecycle-test.json",new{passed=false,checks,error=ex.ToString()});return 1;}

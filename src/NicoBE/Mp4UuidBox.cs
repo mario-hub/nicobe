@@ -11,9 +11,14 @@ public static class Mp4UuidBox
         file.Position=0; (long,int)? found=null;
         Span<byte> header=stackalloc byte[16],id=stackalloc byte[16];
         int boxes=0;
+        bool hasFileType=false,hasMovie=false,hasMedia=false;
         while(file.Position<file.Length)
         {
             token.ThrowIfCancellationRequested();
+            // Some files carry an ASCII numeric footer outside the MP4 boxes.
+            // Accept only a bounded, all-digit tail after the normal top-level
+            // structure. Appending remains strict and never writes past it.
+            if(!appending && hasFileType && hasMovie && hasMedia && IsNumericFooter(file))break;
             if(++boxes>100000 || file.Length-file.Position<8)throw new InvalidDataException("MP4のボックス構造が不正または上限を超えています。");
             long start=file.Position;file.ReadExactly(header[..8]);
             long size=BinaryPrimitives.ReadUInt32BigEndian(header);int headerSize=8;
@@ -30,6 +35,9 @@ public static class Mp4UuidBox
                 size=file.Length-start;
             }
             if(size<headerSize || size>file.Length-start)throw new InvalidDataException("MP4のサイズが不正です。");
+            hasFileType|=header.Slice(4,4).SequenceEqual("ftyp"u8) && size>=headerSize+8;
+            hasMovie|=header.Slice(4,4).SequenceEqual("moov"u8) && size>headerSize;
+            hasMedia|=header.Slice(4,4).SequenceEqual("mdat"u8);
             if(header.Slice(4,4).SequenceEqual("uuid"u8))
             {
                 if(size<headerSize+16)throw new InvalidDataException("MP4のUUIDが不正です。");
@@ -45,6 +53,19 @@ public static class Mp4UuidBox
             file.Position=start+size;
         }
         return found;
+    }
+    static bool IsNumericFooter(Stream file)
+    {
+        long start=file.Position,remaining=file.Length-start;
+        if(remaining is <=0 or >1024)return false;
+        Span<byte> bytes=stackalloc byte[(int)remaining];
+        try
+        {
+            file.ReadExactly(bytes);
+            foreach(byte value in bytes)if(value is <(byte)'0' or >(byte)'9')return false;
+            return true;
+        }
+        finally{file.Position=start;}
     }
     public static byte[]? Read(string path,byte[] id,int limit,CancellationToken token)
     {

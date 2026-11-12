@@ -19,6 +19,7 @@ public static class SelfTest
         try
         {
             StorageLayoutTest.Verify(Check);
+            Mp4UuidBoxTest.Verify(Check);
             CommentSpeedTest.Verify(Check);
             PlaybackSpeedMemoryTest.VerifyAsync(Check).GetAwaiter().GetResult();
             foreach(double rate in new[]{.5,1,2})
