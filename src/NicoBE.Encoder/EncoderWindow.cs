@@ -71,10 +71,14 @@ public sealed class EncoderWindow : Window
     internal FirstRunGuide? Guide {get;private set;}
     CancellationTokenSource? cancellation;
     bool closeAfterStop;
+    internal EncoderRuntimeWatch RuntimeWatch {get;set;}
+    EncoderQueueRecovery? recovery;
+    bool queueSaveFailed;
     internal Func<string,EncoderSettings,IProgress<EncodeProgress>,CancellationToken,Task<EncodeResult>> RunJob {get;set;}=
         (input,settings,progress,token)=>EncoderJob.Run(input,settings,progress,token);
     public EncoderWindow(string[] files,EncoderSettings? initialSettings=null,Action? acknowledgeGuide=null)
     {
+        RuntimeWatch=new EncoderRuntimeWatch(message=>Dispatcher.BeginInvoke(()=>ShowRuntimeWarning(message)));
         this.acknowledgeGuide=acknowledgeGuide??(()=>EncoderSettings.AcknowledgeFfmpegGuide());
         Title="NicoBE Encoder";Width=900;Height=Math.Min(880,SystemParameters.WorkArea.Height-40);MinWidth=800;MinHeight=680;
         WindowStartupLocation=WindowStartupLocation.CenterScreen;FontFamily=new FontFamily("Yu Gothic UI");FontSize=16;AllowDrop=true;SettingsTheme.Apply(this);
@@ -158,7 +162,7 @@ public sealed class EncoderWindow : Window
         ffmpegSection=PathSection("FFmpeg","ffmpeg.exeを指定します。未導入ならダウンロードで配置・設定できます。",toolRow,download);basicPanel.Children.Add(ffmpegSection);
         foreach(var pathBox in new[]{outputFolder,logFolder,ffmpeg})
         {pathBox.FontWeight=FontWeights.Normal;pathBox.SetBinding(ToolTipProperty,new Binding(nameof(TextBox.Text)) {Source=pathBox});}
-        elapsedTimer.Tick+=(_,_)=>UpdateElapsed();Closed+=(_,_)=>elapsedTimer.Stop();
+        elapsedTimer.Tick+=(_,_)=>UpdateElapsed();Closed+=(_,_)=>{elapsedTimer.Stop();RuntimeWatch.Dispose();recovery?.Dispose();};
         try{LoadSettings(initialSettings??EncoderSettings.Load());}catch(Exception ex){LoadSettings(new());status.Text="前回の設定を読み込めませんでした: "+ex.Message;}
         Loaded+=(_,_)=>Dispatcher.BeginInvoke(()=>{if(IsVisible)ShowFirstRunGuide();},DispatcherPriority.Loaded);
         Loaded+=async (_,_)=>await CheckGpu();
@@ -168,7 +172,37 @@ public sealed class EncoderWindow : Window
         PreviewDragOver+=(_,e)=>{e.Effects=cancellation==null && e.Data.GetDataPresent(DataFormats.FileDrop)?DragDropEffects.Copy:DragDropEffects.None;e.Handled=true;};
         Drop+=(_,e)=>{if(cancellation==null && e.Data.GetData(DataFormats.FileDrop) is string[] dropped)AddFiles(dropped);e.Handled=true;};
         Closing+=(_,e)=>{if(cancellation!=null){e.Cancel=true;closeAfterStop=true;cancellation.Cancel();status.Text="処理を中止して終了しています…";}};
+        if(initialSettings==null)RestoreQueue();
+        queue.CollectionChanged+=(_,_)=>SaveRecovery();
         AddFiles(files);
+        if(initialSettings==null)EncoderWindowPlacement.Attach(this);
+    }
+    internal void RestoreQueue()
+    {
+        EncoderQueueRecovery? restored=null;
+        try
+        {
+            restored=EncoderQueueRecovery.RestoreFirst();if(restored?.Snapshot is not {} state)return;
+            LoadSettings(state.Settings);
+            // Keep missing inputs visible so disconnected drives are not silently lost.
+            foreach(string path in state.Files)queue.Add(new(){Path=path});
+            recovery=restored;restored=null;
+            status.Text=$"未完了のキュー {queue.Count}件と設定を復元しました。「エンコード開始」で再開できます。";
+        }
+        catch(Exception ex){ShowError("保存キューを復元できませんでした。\n"+ex.Message);}
+        finally{restored?.Dispose();}
+    }
+    void SaveRecovery()
+    {
+        if(recovery?.Snapshot is not {} state)return;
+        try{recovery.Save(queue.Select(q=>q.Path),state.Settings);}
+        catch(Exception ex)
+        {queueSaveFailed=true;ShowError("残りのキューを保存できませんでした。次の処理を停止します。\n"+ex.Message);}
+    }
+    void ShowRuntimeWarning(string message)
+    {
+        warningText.Text=message+"\n未完了のキューは再起動後に復元します。";
+        warningPanel.Visibility=Visibility.Visible;
     }
     internal void ShowFirstRunGuide()
     {
@@ -312,15 +346,21 @@ public sealed class EncoderWindow : Window
         try
         {
             var pending=queue.Where(q=>q.State!="完了").ToArray();if(pending.Length==0){status.Text="エンコードするTSを追加してください。";return;}
-            var settings=ReadSettings();settings.Validate();cancellation=new();start.IsEnabled=false;cancel.IsEnabled=true;settingsPanel.IsEnabled=false;assStyle.IsEnabled=false;basicPanel.IsEnabled=false;queueActions.IsEnabled=false;ShowError("");ShowWarnings(warnings);status.Foreground=SettingsTheme.Muted;
+            var settings=ReadSettings();settings.Validate();
+            queueSaveFailed=false;recovery??=EncoderQueueRecovery.Create();recovery.Save(queue.Select(q=>q.Path),settings);
+            RuntimeWatch.Start();
+            if(RuntimeWatch.RestartRequired){ShowRuntimeWarning(RuntimeWatch.Reason!);return;}
+            cancellation=new();start.IsEnabled=false;cancel.IsEnabled=true;settingsPanel.IsEnabled=false;assStyle.IsEnabled=false;basicPanel.IsEnabled=false;queueActions.IsEnabled=false;ShowError("");ShowWarnings(warnings);status.Foreground=SettingsTheme.Muted;
             status.Text="エンコーダーを確認しています…";
             if(await EncoderCapabilities.Resolve(settings,cancellation.Token)){backend.SelectedValue=settings.Backend;passes.SelectedValue=settings.Passes.ToString(CultureInfo.InvariantCulture);quality.Value=settings.Quality;}
             settings.Save();
+            recovery.Save(queue.Select(q=>q.Path),settings);
             elapsed.Restart();UpdateElapsed();elapsedTimer.Start();progress.Value=0;detail.Text="";
             int completed=0,failed=0;
             foreach(var item in pending)
             {
-                if(cancellation.IsCancellationRequested)break;
+                RuntimeWatch.CheckNow();
+                if(cancellation.IsCancellationRequested||RuntimeWatch.RestartRequired||queueSaveFailed)break;
                 item.Error="";bool itemFinished=false;
                 var reporter=new Progress<EncodeProgress>(p=>{if(itemFinished)return;if(p.Command!=null)extraArguments.LastCommand=p.Command;item.State=p.Stage;status.Text=$"{Array.IndexOf(pending,item)+1}/{pending.Length}　{p.Stage} — {item.Name}";detail.Text=p.Detail;progress.Value=p.Fraction;});
                 try
@@ -332,15 +372,18 @@ public sealed class EncoderWindow : Window
                 catch(Exception ex){item.State="失敗";item.Error=ex.Message;failed++;ShowError(item.Name+"\n"+ex.Message);}
                 finally{itemFinished=true;}
             }
-            status.Text=$"{(cancellation.IsCancellationRequested?"中止しました":"処理が終了しました")}　完了 {completed}件 / 失敗 {failed}件 / 警告 {warnings.Count}件";
+            RuntimeWatch.CheckNow();
+            status.Text=$"{(RuntimeWatch.RestartRequired?"再起動が必要なため停止しました":queueSaveFailed?"キュー保存エラーで停止しました":cancellation.IsCancellationRequested?"中止しました":"処理が終了しました")}　完了 {completed}件 / 失敗 {failed}件 / 警告 {warnings.Count}件";
             status.Foreground=failed>0?errorText.Foreground:warnings.Count>0?warningText.Foreground:SettingsTheme.Muted;
         }
         catch(Exception ex){status.Text="エンコードを開始できませんでした。";status.Foreground=errorText.Foreground;ShowError(ex.Message);}
         finally
         {
+            RuntimeWatch.Stop();
+            if(RuntimeWatch.RestartRequired)warnings.Add(RuntimeWatch.Reason!+"\n未完了のキューは再起動後に復元します。");
             if(warnings.Count>0)ShowWarnings(warnings);
             elapsed.Stop();elapsedTimer.Stop();UpdateElapsed();
-            cancellation?.Dispose();cancellation=null;start.IsEnabled=true;cancel.IsEnabled=false;settingsPanel.IsEnabled=true;assStyle.IsEnabled=true;basicPanel.IsEnabled=true;queueActions.IsEnabled=true;if(closeAfterStop)Close();
+            cancellation?.Dispose();cancellation=null;start.IsEnabled=!RuntimeWatch.RestartRequired;cancel.IsEnabled=false;settingsPanel.IsEnabled=true;assStyle.IsEnabled=true;basicPanel.IsEnabled=true;queueActions.IsEnabled=true;if(closeAfterStop)Close();
         }
     }
     void ShowError(string text){errorText.Text=text;errorPanel.Visibility=text.Length>0?Visibility.Visible:Visibility.Collapsed;}

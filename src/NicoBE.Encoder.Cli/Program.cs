@@ -46,13 +46,17 @@ internal static class Program
         ConsoleCancelEventHandler cancel=(_,e)=>{e.Cancel=true;cancellation.Cancel();};
         Console.CancelKeyPress+=cancel;
         var progress=new ConsoleProgress();
+        using var runtime=new EncoderRuntimeWatch(message=>Console.Error.WriteLine("警告: "+message));
         try
         {
             EncoderPaths.Initialize();
+            runtime.Start();
+            if(runtime.RestartRequired)return 1;
             Console.Error.WriteLine("入力: "+request.Input);
             Console.Error.WriteLine("処理を開始します。中止はCtrl+C。");
             progress.Start();
             var result=await EncoderJob.Run(request.Input,request.Settings,progress,cancellation.Token,outputFile:request.OutputFile);
+            runtime.CheckNow();
             progress.Stop();
             Console.WriteLine("完了: "+result.Output);
             Console.WriteLine("経過時間: "+progress.Elapsed);
@@ -66,7 +70,7 @@ internal static class Program
         }
         catch(OperationCanceledException ex){progress.Stop();Console.Error.WriteLine("中止: "+ex.Message);return 130;}
         catch(Exception ex){progress.Stop();Console.Error.WriteLine("失敗: "+ex.Message);return 1;}
-        finally{progress.Stop();Console.CancelKeyPress-=cancel;}
+        finally{runtime.Stop();progress.Stop();Console.CancelKeyPress-=cancel;}
     }
 
     sealed class ConsoleProgress : IProgress<EncodeProgress>

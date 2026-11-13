@@ -29,6 +29,7 @@ public static class Program
         if(args.Contains("--live-test"))return LiveCommentTest.Run();
         if(args.Contains("--pastlog-test"))return PastLogTest.Run(args.FirstOrDefault(a=>!a.StartsWith("--")));
         if(args.Contains("--playback-lifecycle-test"))return PlaybackLifecycleTest.Run();
+        if(args.Contains("--runtime-restart-test"))return RuntimeRestartMonitorTest.Run();
         if(args.Contains("--scene-continuity-test"))return CommentSceneTest.RunContinuity();
         if(args.Contains("--watcher-test"))return WatcherTest.Run(args.First(a=>!a.StartsWith("--")),args.Contains("--memory-only"));
         if(args.Contains("--self-test")) return SelfTest.Run();

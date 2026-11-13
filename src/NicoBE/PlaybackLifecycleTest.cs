@@ -82,10 +82,14 @@ internal static class PlaybackLifecycleTest
             Check(publications==before,"Closing last player cancels API and suppresses all late UI updates");
             PanelCommentState? failedState=null;
             using var failed=new PlaybackCommentSession("invalid.mp4",new(),(_,_,_)=>{},s=>failedState=s,_=>{},service,
-                loadContext:(_,_,_)=>throw new InvalidDataException("MP4のサイズが不正です。"));
+                loadContext:(_,_,_)=>throw new InvalidDataException("MP4のサイズが不正です。",new IOException("inner-read-test")));
             Wait(failed.StartAsync());
             Check(failedState is {Status:"読取失敗",CanFetch:false,Busy:false}&&failedState.Detail.Contains("MP4のサイズが不正"),
                 "Initial read failure shows short failure status and error detail, not checking forever");
+            string log=File.ReadAllText(Path.Combine(Paths.Logs,"nicobe.log"));
+            Check(log.Contains("comment-read-failed file=invalid.mp4")&&log.Contains("System.IO.InvalidDataException")
+                &&log.Contains("System.IO.IOException: inner-read-test")&&log.Contains("PlaybackLifecycleTest"),
+                "Read failure log includes input file, exception type, inner exception and stack trace");
             Paths.WriteJson("playback-lifecycle-test.json",new{passed=true,checks});return 0;
         }
         catch(Exception ex){Paths.WriteJson("playback-lifecycle-test.json",new{passed=false,checks,error=ex.ToString()});return 1;}

@@ -15,6 +15,7 @@ public sealed class ResidentController : IDisposable
     readonly Forms.ToolStripMenuItem commentsMenu=new("コメントを表示");
     readonly PlayerWatcher watch;
     readonly DispatcherTimer idleCleanup;
+    readonly RuntimeRestartMonitor runtimeMonitor;
     readonly Dictionary<MainWindow,(Process Process,EventHandler Handler)> exits=new();
     readonly Dispatcher dispatcher=Dispatcher.CurrentDispatcher;
     readonly System.Drawing.Icon icon;
@@ -46,6 +47,11 @@ public sealed class ResidentController : IDisposable
             GC.Collect(2,GCCollectionMode.Aggressive,blocking:true,compacting:true);
             LastIdleTrimSucceeded=Native.EmptyWorkingSet(Native.GetCurrentProcess());IdleCollections++;
         };
+        runtimeMonitor=new RuntimeRestartMonitor(message=>
+        {
+            tray.Text="NicoBE（再起動が必要）";
+            nextNotification=DateTime.MinValue;ReportFailure(message);
+        });
         watch=new PlayerWatcher(TryAttach);watch.Start();
         ScheduleIdleCleanup();
         if(showTray && !config.SetupCompleted)Dispatcher.CurrentDispatcher.BeginInvoke(()=>ShowSettings(false));
@@ -110,6 +116,7 @@ public sealed class ResidentController : IDisposable
     void RemoveSession(MainWindow session)
     {
         if(!sessions.Remove(session))return;
+        runtimeMonitor.SetActive(sessions.Count>0);
         session.Failure-=ReportFailure;
         session.SettingsRequested-=ShowPlayerSettings;
         session.CommonSettingRequested-=SetPanelSetting;
@@ -126,6 +133,7 @@ public sealed class ResidentController : IDisposable
             candidate=Process.GetProcessById(checked((int)pid));
             if(candidateFilter?.Invoke(candidate)==false)return true;
             if(PlayerLocator.Executable(candidate)==null)return true;
+            runtimeMonitor.SetActive(true);
             // A CREATE notification can precede the player's command handler.
             // MpcClient retries the handshake for this specific process as needed.
             created=CreateSession();created.AttachTarget(candidate,window);retained=created.PlayerId==candidate.Id;
@@ -137,7 +145,7 @@ public sealed class ResidentController : IDisposable
         }
         catch(Exception ex)
         {if(created!=null)RemoveSession(created);TraceLog.Write("detect-player "+ex.Message);ReportFailure("MPC-BEとの連携を開始できません。\n"+ex.Message);return false;}
-        finally{if(!retained)candidate?.Dispose();}
+        finally{runtimeMonitor.SetActive(sessions.Count>0);if(!retained)candidate?.Dispose();}
     }
     void BuildMenu()
     {
@@ -173,7 +181,7 @@ public sealed class ResidentController : IDisposable
     }
     public void Dispose()
     {
-        if(disposed)return;disposed=true;settings?.Close();watch.Dispose();idleCleanup.Stop();tray.Visible=false;tray.Dispose();menu.Dispose();icon.Dispose();
+        if(disposed)return;disposed=true;settings?.Close();watch.Dispose();runtimeMonitor.Dispose();idleCleanup.Stop();tray.Visible=false;tray.Dispose();menu.Dispose();icon.Dispose();
         foreach(var session in sessions.ToArray())RemoveSession(session);
     }
 }

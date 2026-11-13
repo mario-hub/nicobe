@@ -111,7 +111,7 @@ try {
     $playerOk=Test-Case 'build-player' {Invoke-Child $ps @('-NoProfile','-ExecutionPolicy','Bypass','-File',(Join-Path $PSScriptRoot 'build.ps1'),'-OutputDirectory',$playerBuild) $root (Join-Path $run 'build-player') 600}
     $encoderOk=Test-Case 'build-encoder-cli' {Invoke-Child $ps @('-NoProfile','-ExecutionPolicy','Bypass','-File',(Join-Path $PSScriptRoot 'build-encoder.ps1'),'-OutputDirectory',$encoderBuild) $root (Join-Path $run 'build-encoder') 600}
     if($playerOk){
-        foreach($name in @('self','storage','failure','live','pastlog','ass','settings','visibility','playback-panel','mpc-control','playback-lifecycle','scene-continuity')){
+        foreach($name in @('self','storage','failure','live','pastlog','ass','settings','visibility','playback-panel','mpc-control','playback-lifecycle','runtime-restart','scene-continuity')){
             $report=if($name -eq 'live'){'live-comment-test.json'}else{$name+'-test.json'}
             App-Test ('player-'+$name) $playerBuild 'NicoBE.exe' ('--'+$name+'-test') ('logs/'+$report)
         }
@@ -124,7 +124,7 @@ try {
         foreach($test in @(
             @('failure','logs/failure-test.json'),@('storage','logs/storage-test.json'),@('pipe','logs/pipe-failure-test.json'),
             @('installer','temp/test-results/installer-test.json'),@('comment-format','temp/test-results/comment-format/result.json'),
-            @('ass-style','logs/ass-style-test.json'),@('extra-arguments','logs/extra-arguments-test.json'),@('ui','temp/test-results/encoder-ui-checks.json'),@('guide','temp/test-results/encoder-guide-test.json'))){
+            @('ass-style','logs/ass-style-test.json'),@('extra-arguments','logs/extra-arguments-test.json'),@('restart','logs/restart-test.json'),@('ui','temp/test-results/encoder-ui-checks.json'),@('guide','temp/test-results/encoder-guide-test.json'))){
             App-Test ('encoder-'+$test[0]) $encoderBuild 'NicoBE.Encoder.exe' ('--'+$test[0]+'-test') $test[1]
         }
         App-Test 'cli-arguments' $encoderBuild 'NicoBE.Encoder.Cli.exe' '--self-test' ''

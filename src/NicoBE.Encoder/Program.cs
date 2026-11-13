@@ -24,6 +24,7 @@ public static class Program
         if(args.Contains("--comment-format-test"))return CommentFormatTest.Run();
         if(args.Contains("--ass-style-test"))return AssStyleTest.Run();
         if(args.Contains("--extra-arguments-test"))return ExtraVideoArgumentsTest.Run();
+        if(args.Contains("--restart-test"))return EncoderRestartTest.Run();
         if(args.Contains("--extra-arguments-media-test"))return ExtraVideoArgumentsTest.RunMedia(args.First(a=>!a.StartsWith("--"))).GetAwaiter().GetResult();
         if(args.Contains("--no-comments-test"))return NoCommentsTest.Run(args.First(a=>!a.StartsWith("--"))).GetAwaiter().GetResult();
         if(args.Contains("--encode-interruption-test"))return EncodeInterruptionTest.Run(args.First(a=>!a.StartsWith("--")));

@@ -444,6 +444,8 @@
 <p class="note">MP4のオリジナル形式には投稿者IDなどの元属性も含まれます。NG設定は表示だけを制御し、保存データからは削除しません。再変換・再多重化するとコメントや同期情報が失われる場合があります。</p>
 
 <p>Encoder／CLIのコメント補完にも、<a href="https://jikkyo.tsukumijima.net/" target="_blank" rel="noopener noreferrer">ニコニコ実況 過去ログ API</a>を利用しています。NicoBEの自動取得とは別の設定で、初期値はオフです。コメントの格納または外部ASS保存が有効な場合に取得します。</p>
+<details><summary>連続エンコードの中断と再開</summary><div class="detail-body"><p>GUIは未完了のキューと設定を保存します。再起動後は復元した一覧を確認し、「エンコード開始」で再開してください。完了した動画は除外し、失敗・中止した動画は先頭からやり直します。</p><p>.NET更新などで使用中のランタイムが削除された場合は、現在の1件の完了を試み、次の動画へ進まず再起動を案内します。確認は処理中のみ行います。処理中の1件が必ず成功するわけではありません。</p><p>キューはデータ保存先の <code>queues</code> に保存します。複数ウィンドウは別々に保存し、起動時に処理中でないキューを1つ復元します。CLIは1回1件の処理のためキュー復元は行わず、.NET異常は標準エラーに表示します。開始前に検知した場合は終了コード1、処理中に検知しても正常完了できれば0です。</p></div></details>
+<p>Encoderは終了時のウィンドウ位置・サイズ・最大化状態を記憶します。ディスプレイ構成が変わった場合は画面内に収めます。</p>
 <h3 id="encode-settings">エンコード設定</h3>
 <div class="table-wrap"><table class="responsive-table setting-table"><thead><tr><th scope="col">項目</th><th scope="col">選択肢・動作</th><th scope="col">初期値</th></tr></thead><tbody>
 <tr><th scope="row">保存形式</th><td>MP4／MKV</td><td>MP4</td></tr>
@@ -522,7 +524,7 @@
 <tr><th scope="row">Encoder<br>GUI・CLI共通</th><td>実行ファイルの隣</td><td><code>%LOCALAPPDATA%\NicoBE\encoder</code></td></tr>
 <tr><th scope="row">過去ログAPIのキャッシュ</th><td colspan="2"><code>%LOCALAPPDATA%\NicoBE\cache\jikkyo\v1</code>（両アプリ共通）</td></tr><tr><th scope="row">FFmpeg</th><td>Encoderの隣の<code>ffmpeg</code></td><td><code>%LOCALAPPDATA%\NicoBE\ffmpeg</code></td></tr>
 </tbody></table></div>
-<div class="cards"><div class="card"><h4>設定と作業データ</h4><p>設定は<code>nicobe.json</code>／<code>encoder-settings.json</code>、ログは<code>logs</code>、一時ファイルは<code>temp</code>に保存します。</p></div><div class="card"><h4>完成した動画</h4><p>初期値はEncoderのデータ保存先の<code>output</code>です。出力先を設定・指定した場合は、その場所を使います。 ファイル名は元TSの拡張子だけをMP4／MKVに変更します。同名の動画・ASSがある場合だけ連番を付けます。</p></div></div>
+<div class="cards"><div class="card"><h4>設定と作業データ</h4><p>設定は<code>nicobe.json</code>／<code>encoder-settings.json</code>、ログは<code>logs</code>、一時ファイルは<code>temp</code>、Encoderの再開用キューは<code>queues</code>に保存します。</p></div><div class="card"><h4>完成した動画</h4><p>初期値はEncoderのデータ保存先の<code>output</code>です。出力先を設定・指定した場合は、その場所を使います。 ファイル名は元TSの拡張子だけをMP4／MKVに変更します。同名の動画・ASSがある場合だけ連番を付けます。</p></div></div>
 <details><summary>配置・移動時の補足</summary><div class="detail-body"><p>Program Files (x86)配下も同じ扱いです。通常の起動・設定保存・FFmpegダウンロードで管理者として起動する必要はありません。それ以外の場所では、書き込みできるフォルダに配置してください。</p><p>同じWindowsユーザーがProgram Files配下へ複数配置すると、設定とFFmpegを共有します。以前の場所にある設定やFFmpegは自動移動しません。</p><p>FFmpegは配布元のバージョン名のフォルダへ展開し、同じバージョンを再取得した場合は短い連番を付けます。アイコン・MKV用DLLは実行ファイル側に置きます。任意の<code>channels.json</code>はデータ保存先を優先し、なければ実行ファイルの隣から読みます。</p></div></details>
 </section>
 
@@ -572,9 +574,10 @@
 
 <section id="faq">
 <div class="section-heading"><span class="section-number" aria-hidden="true">05</span><h2>よくある質問</h2></div>
-<details><summary>操作パネルに「読取失敗」と出る</summary><div class="detail-body"><p>動画の情報を読み込めなかった状態です。表示にマウスを重ねると原因を確認できます。MP4末尾の小さな数字列は読み取り時だけ無視しますが、途中のサイズ不整合や欠損はエラーにします。元ファイルは変更しません。</p><p>同期情報がない動画では、過去ログ取得が「対象外」になります。</p></div></details>
+<details><summary>操作パネルに「読取失敗」と出る</summary><div class="detail-body"><p>動画の情報を読み込めなかった状態です。表示にマウスを重ねると原因を確認できます。MP4末尾の小さな数字列は読み取り時だけ無視しますが、途中のサイズ不整合や欠損はエラーにします。元ファイルは変更しません。</p><p>読取失敗の対象ファイル名・例外・内部例外・スタックトレースは <code>logs/nicobe.log</code> に記録します。</p><p>同期情報がない動画では、過去ログ取得が「対象外」になります。</p></div></details>
 <details><summary>DTV・TS抜きの録画環境で使える？</summary><div class="detail-body"><p>録画済みのMPEG-TSと、放送日時・放送局が対応するNicoJK形式の実況ログがあれば使えます。EDCBのNicojCatchで保存した同形式のログも対象です。NicoBE自体はテレビの受信・録画を行いません。コメントは保存ログのほか、過去ログAPIからも取得できます。</p></div></details>
 <details><summary>起動できない</summary><div class="detail-body"><p>「.NETが必要」と表示される場合は、<a href="https://aka.ms/dotnet/10.0/windowsdesktop-runtime-win-x64.exe?utm_source=chatgpt.com">.NET 10 Desktop Runtime（Windows x64）</a>を導入してください。ZIPはフォルダごと展開し、同梱DLLも一緒に配置します。</p><p>保存先のエラーは、表示されたフォルダのアクセス権と空き容量を確認してください。Windowsの保護機能で起動が止まる場合は、入手元と表示された警告内容を確認し、解決できなければお問い合わせください。</p></div></details>
+<details><summary>.NET更新後に再起動を案内された</summary><div class="detail-body"><p>NicoBEをトレイの「終了」で終了し、起動し直してください。MPC-BEを閉じる必要はありません。</p><p>MPC-BEとの連携開始時と連携中の30秒ごとに、使用中の.NET／WPFの主要ファイルを確認し、削除されていた場合に通知します。新しい.NETが追加されただけでは通知せず、MPC-BEがない待機中は確認しません。</p></div></details>
 <details><summary>エラーの確認・不具合の報告</summary><div class="detail-body"><p>NicoBEの読み込み・描画エラーはトレイで通知します。通知をクリックするか、設定の「診断」を開くと、直近20件を確認・コピーできます。GPU描画は自動復旧を試み、復旧できない場合に通知します。カクつきの調査に使う画面の更新頻度・目標FPS・送信FPS・送信間隔はログに記録します。送信値はPresentの成功を計測したもので、画面上の実表示の測定ではありません。</p><p>Encoderでは操作タブの結果とログを確認します。<a href="https://docs.google.com/forms/d/e/1FAIpQLScLrY7nKGfU2TeV2BOhc6yy_lWtxwzR2n3J_XTFFovaTSqbPA/viewform">お問い合わせ</a>には、アプリ・Windows・MPC-BEのバージョン、操作手順、エラー内容を添えてください。ログや設定を共有するときは、ユーザー名・ファイル名・NG設定などを確認してください。</p></div></details>
 <details><summary>更新・アンインストール</summary><div class="detail-body"><p>更新はNicoBEをトレイの「終了」で終了し、Encoderも閉じてから行います。新しいZIPを別フォルダへ展開し、設定・ログ・FFmpeg・出力動画を残して、アプリの配布ファイルを差し替えてください。</p><p>削除する場合は、先に「Windows起動時に常駐」をオフにして保存し、両アプリを終了します。必要な設定や動画を退避してからアプリのフォルダを削除してください。Program Files配置時のデータと、配置場所に関係なく過去ログAPIの共有キャッシュはLocalAppDataに残ります。削除するなら<a href="#storage">保存先</a>を確認し、ほかの配置と共有していないか確かめてください。</p></div></details>
 <details><summary>このページのアクセス解析</summary><div class="detail-body"><p>公開サイトでは、ページの利用状況を把握するためGoogle Analytics 4を使用します。Cookieなどを通じてアクセス情報がGoogleへ送信されます。録画・実況ログ・アプリの設定を、このページが読み取ることはありません。<a href="https://policies.google.com/technologies/partner-sites?hl=ja">Googleによるデータの使用</a></p></div></details>

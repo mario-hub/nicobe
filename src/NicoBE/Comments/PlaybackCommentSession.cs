@@ -73,7 +73,14 @@ internal sealed class PlaybackCommentSession:IDisposable
             Schedule();
         }
         catch(OperationCanceledException){}
-        catch(Exception ex){if(!disposed){warning=ex.Message;Publish();}}
+        catch(Exception ex)
+        {
+            if(!disposed)
+            {
+                TraceLog.Write($"comment-read-failed file={file}{Environment.NewLine}{ex}");
+                warning=ex.Message;Publish();
+            }
+        }
         if(disposed)return;
         if(Path.GetExtension(file).ToLowerInvariant() is ".ts" or ".m2ts" or ".mts")
         {
