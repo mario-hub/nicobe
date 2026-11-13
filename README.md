@@ -1,5 +1,7 @@
 # NicoBE
 
+**配布サイト・ダウンロード：** [https://www.moreread.net/apps/nicobe/](https://www.moreread.net/apps/nicobe/)
+
 MPC-BEで再生している録画に、NicoJKの実況コメントを重ねて表示するWindows用アプリです。タスクトレイに常駐し、起動中のMPC-BEを自動検出します。
 
 付属の **NicoBE Encoder** は、TSをH.264／H.265／AV1のMP4またはMKVへ変換し、コメントの同期に必要な録画情報と、任意でコメント本体を保存します。コメントはMP4では元の本文・全属性と同期時刻を保持する形式、MKVではASS字幕として保存します。
