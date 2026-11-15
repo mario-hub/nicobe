@@ -60,6 +60,8 @@ public sealed class EncoderWindow : Window
     readonly StackPanel queueActions=new() {Orientation=Orientation.Horizontal};
     readonly Stopwatch elapsed= new();
     readonly TextBox elapsedText=SelectableText("経過時間  00:00:00");
+    string batchDisplay="0 / 0";
+    readonly TextBox rateText=SelectableText("");
     readonly DispatcherTimer elapsedTimer=new() {Interval=TimeSpan.FromMilliseconds(250)};
     internal TabControl Tabs {get;}=new();
     readonly Grid layout=new();
@@ -94,7 +96,14 @@ public sealed class EncoderWindow : Window
         Tabs.Items.Add(new TabItem {Header="基本設定",Content=SettingsTab(basicPanel)});
         Tabs.Items.Add(LicensePanel.Create("NicoBE Encoder"));
         var footer=new StackPanel {Margin=new Thickness(0,12,0,0)};DockPanel.SetDock(footer,Dock.Bottom);operations.Children.Add(footer);
-        footer.Children.Add(elapsedText);footer.Children.Add(progress);footer.Children.Add(status);footer.Children.Add(detail);
+        var progressHeader=new DockPanel();
+        rateText.Width=46;rateText.TextAlignment=TextAlignment.Right;
+        System.Windows.Documents.Typography.SetNumeralAlignment(rateText,FontNumeralAlignment.Tabular);
+        DockPanel.SetDock(rateText,Dock.Right);progressHeader.Children.Add(rateText);
+        foreach(var label in new[]{elapsedText,rateText})
+        {label.FontFamily=new FontFamily("BIZ UDGothic");label.FontSize=14;label.TextWrapping=TextWrapping.NoWrap;label.VerticalScrollBarVisibility=ScrollBarVisibility.Disabled;label.HorizontalScrollBarVisibility=ScrollBarVisibility.Disabled;}
+        progressHeader.Children.Add(elapsedText);
+        footer.Children.Add(progressHeader);footer.Children.Add(progress);footer.Children.Add(status);footer.Children.Add(detail);
         errorText.MaxHeight=110;errorPanel.Child=errorText;footer.Children.Add(errorPanel);
         warningText.MaxHeight=130;warningPanel.Child=warningText;footer.Children.Add(warningPanel);
         var footerButtons=new StackPanel {Orientation=Orientation.Horizontal,HorizontalAlignment=HorizontalAlignment.Right,Margin=new Thickness(0,10,0,0)};
@@ -173,8 +182,8 @@ public sealed class EncoderWindow : Window
         Drop+=(_,e)=>{if(cancellation==null && e.Data.GetData(DataFormats.FileDrop) is string[] dropped)AddFiles(dropped);e.Handled=true;};
         Closing+=(_,e)=>{if(cancellation!=null){e.Cancel=true;closeAfterStop=true;cancellation.Cancel();status.Text="処理を中止して終了しています…";}};
         if(initialSettings==null)RestoreQueue();
-        queue.CollectionChanged+=(_,_)=>SaveRecovery();
-        AddFiles(files);
+        queue.CollectionChanged+=(_,_)=>{SaveRecovery();if(cancellation==null)SetBatch(0,queue.Count);};
+        AddFiles(files);SetBatch(0,queue.Count);
         if(initialSettings==null)EncoderWindowPlacement.Attach(this);
     }
     internal void RestoreQueue()
@@ -355,14 +364,15 @@ public sealed class EncoderWindow : Window
             if(await EncoderCapabilities.Resolve(settings,cancellation.Token)){backend.SelectedValue=settings.Backend;passes.SelectedValue=settings.Passes.ToString(CultureInfo.InvariantCulture);quality.Value=settings.Quality;}
             settings.Save();
             recovery.Save(queue.Select(q=>q.Path),settings);
-            elapsed.Restart();UpdateElapsed();elapsedTimer.Start();progress.Value=0;detail.Text="";
+            elapsed.Restart();UpdateElapsed();elapsedTimer.Start();progress.Value=0;detail.Text="";SetBatch(0,pending.Length);rateText.Text="";
             int completed=0,failed=0;
             foreach(var item in pending)
             {
                 RuntimeWatch.CheckNow();
                 if(cancellation.IsCancellationRequested||RuntimeWatch.RestartRequired||queueSaveFailed)break;
                 item.Error="";bool itemFinished=false;
-                var reporter=new Progress<EncodeProgress>(p=>{if(itemFinished)return;if(p.Command!=null)extraArguments.LastCommand=p.Command;item.State=p.Stage;status.Text=$"{Array.IndexOf(pending,item)+1}/{pending.Length}　{p.Stage} — {item.Name}";detail.Text=p.Detail;progress.Value=p.Fraction;});
+                SetBatch(Array.IndexOf(pending,item)+1,pending.Length);rateText.Text="";
+                var reporter=new Progress<EncodeProgress>(p=>{if(itemFinished)return;if(p.Command!=null)extraArguments.LastCommand=p.Command;item.State=p.Stage;status.Text=$"{p.Stage} — {item.Name}";rateText.Text=p.SpeedText??"";detail.Text=p.RateText==null?p.Detail:"";progress.Value=p.Fraction;});
                 try
                 {
                     var result=await RunJob(item.Path,settings,reporter,cancellation.Token);itemFinished=true;item.State="完了";completed++;queue.Remove(item);detail.Text="保存先: "+result.Output;
@@ -389,7 +399,8 @@ public sealed class EncoderWindow : Window
     void ShowError(string text){errorText.Text=text;errorPanel.Visibility=text.Length>0?Visibility.Visible:Visibility.Collapsed;}
     void ShowWarnings(IReadOnlyList<string> warnings)
     {warningText.Text=warnings.Count==0?"":$"警告（{warnings.Count}件）\n\n"+string.Join("\n\n",warnings);warningPanel.Visibility=warnings.Count>0?Visibility.Visible:Visibility.Collapsed;}
-    void UpdateElapsed(){var time=elapsed.Elapsed;elapsedText.Text=$"経過時間  {(int)time.TotalHours:00}:{time.Minutes:00}:{time.Seconds:00}";}
+    void SetBatch(int current,int total){batchDisplay=$"{current} / {total}";UpdateElapsed();}
+    void UpdateElapsed(){var time=elapsed.Elapsed;elapsedText.Text=$"経過時間 {(int)time.TotalHours:00}:{time.Minutes:00}:{time.Seconds:00} ( {batchDisplay} )";}
     internal void PreviewFailure()
     {
         var item=new QueueItem {Path="サンプル.ts",State="失敗",Error="コメント同期の検証に失敗しました。\n動画は削除せず保持しました: 出力先\\サンプル_同期確認失敗.mp4\n処理ログ: encoder\\logs\\sample.log"};

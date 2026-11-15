@@ -9,6 +9,9 @@ namespace NicoBE.Encoder;
 public sealed record EncodeProgress(string Stage,double Fraction,string Detail)
 {
     public string? Command {get;init;}
+    public string? RateText {get;init;}
+    public string? PercentText {get;init;}
+    public string? SpeedText {get;init;}
 }
 public sealed record EncodeResult(string Output,string Log,Mp4RecordingMetadata Metadata)
 {
@@ -174,7 +177,11 @@ public static class EncoderJob
             int split=line.IndexOf('=');if(split<0)continue;string key=line[..split],value=line[(split+1)..];
             if(key=="out_time_us" && double.TryParse(value,NumberStyles.Float,CultureInfo.InvariantCulture,out double micros))fraction=Math.Clamp(micros/1000000/Math.Max(1,duration),0,1);
             if(key=="speed")speed=value;
-            if(key=="progress")progress.Report(new(stage,(index-1+fraction)/count,$"{fraction:P0}　速度 {speed}"));
+            if(key=="progress")
+            {
+                string rate=$"{fraction:P0}　速度 {speed}";
+                progress.Report(new(stage,(index-1+fraction)/count,rate){RateText=rate,PercentText=$"{fraction:P0}",SpeedText=speed});
+            }
         }
         await p.WaitForExitAsync();await errors;token.ThrowIfCancellationRequested();
         if(unusedOption!=null)throw new Exception("FFmpegが追加指定を適用できませんでした。\n"+unusedOption+"\nログ: "+log);

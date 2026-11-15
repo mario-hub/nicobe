@@ -449,6 +449,7 @@
 <p>Encoder／CLIのコメント補完にも、<a href="https://jikkyo.tsukumijima.net/" target="_blank" rel="noopener noreferrer">ニコニコ実況 過去ログ API</a>を利用しています。NicoBEの自動取得とは別の設定で、初期値はオフです。コメントの格納または外部ASS保存が有効な場合に取得します。</p>
 <details><summary>連続エンコードの中断と再開</summary><div class="detail-body"><p>GUIは未完了のキューと設定を保存します。再起動後は復元した一覧を確認し、「エンコード開始」で再開してください。完了した動画は除外し、失敗・中止した動画は先頭からやり直します。</p><p>.NET更新などで使用中のランタイムが削除された場合は、現在の1件の完了を試み、次の動画へ進まず再起動を案内します。確認は処理中のみ行います。処理中の1件が必ず成功するわけではありません。</p><p>キューはデータ保存先の <code>queues</code> に保存します。複数ウィンドウは別々に保存し、起動時に処理中でないキューを1つ復元します。CLIは1回1件の処理のためキュー復元は行わず、.NET異常は標準エラーに表示します。開始前に検知した場合は終了コード1、処理中に検知しても正常完了できれば0です。</p></div></details>
 <p>Encoderは終了時のウィンドウ位置・サイズ・最大化状態を記憶します。ディスプレイ構成が変わった場合は画面内に収めます。</p>
+<p>操作タブでは、進捗バーの上の左側に経過時間と処理本数、右側に速度の数値を表示します。</p>
 <h3 id="encode-settings">エンコード設定</h3>
 <div class="table-wrap"><table class="responsive-table setting-table"><thead><tr><th scope="col">項目</th><th scope="col">選択肢・動作</th><th scope="col">初期値</th></tr></thead><tbody>
 <tr><th scope="row">保存形式</th><td>MP4／MKV</td><td>MP4</td></tr>
