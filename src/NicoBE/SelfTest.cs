@@ -19,6 +19,7 @@ public static class SelfTest
         try
         {
             StorageLayoutTest.Verify(Check);
+            ChannelMapTest.Verify(Check);
             Mp4UuidBoxTest.Verify(Check);
             CommentSpeedTest.Verify(Check);
             PlaybackSpeedMemoryTest.VerifyAsync(Check).GetAwaiter().GetResult();

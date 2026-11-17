@@ -104,7 +104,8 @@ public static class LogReader
             : ChannelMap.Default;
         var keys = new[] { $"{info.NetworkId}:{info.ServiceId}", $"{(info.NetworkId is 4 or 6 ? info.NetworkId : 15)}:{info.ServiceId}", info.ServiceId.ToString() };
         string? channel = keys.Select(k => config.ChannelOverrides.GetValueOrDefault(k)).FirstOrDefault(x => x != null)
-            ?? keys.Select(k => map.GetValueOrDefault(k)).FirstOrDefault(x => x != null);
+            ?? keys.Select(k => map.GetValueOrDefault(k)).FirstOrDefault(x => x != null)
+            ?? keys.Select(k => ChannelMap.Default.GetValueOrDefault(k)).FirstOrDefault(x => x != null);
         if (channel == null || !System.Text.RegularExpressions.Regex.IsMatch(channel, "^jk[0-9]+$"))
             throw new CommentLogUnavailableException($"実況局が不明です。channelOverrides に \"{info.NetworkId}:{info.ServiceId}\": \"jk番号\" を指定してください。");
         return channel;

@@ -578,6 +578,7 @@
 
 <section id="faq">
 <div class="section-heading"><span class="section-number" aria-hidden="true">05</span><h2>よくある質問</h2></div>
+<details><summary>BS局のコメント対応</summary><div class="detail-body"><p>NHK BS、民放BS、WOWOW、BS11・BS12など、<a href="https://github.com/xtne6f/NicoJK/blob/master/jkch.sh.txt">NicoJKの局対応表</a>にあるBSの46サービスに対応しています（2026年11月17日確認）。旧局・サブチャンネルも含みます。過去ログの取得には対象日時のログが必要です。</p><p>独自の <code>channels.json</code> に記載された局を優先し、未記載の局は内蔵表で補います。</p></div></details>
 <details><summary>操作パネルに「読取失敗」と出る</summary><div class="detail-body"><p>動画の情報を読み込めなかった状態です。表示にマウスを重ねると原因を確認できます。MP4末尾の小さな数字列は読み取り時だけ無視しますが、途中のサイズ不整合や欠損はエラーにします。元ファイルは変更しません。</p><p>読取失敗の対象ファイル名・例外・内部例外・スタックトレースは <code>logs/nicobe.log</code> に記録します。</p><p>同期情報がない動画では、過去ログ取得が「対象外」になります。</p></div></details>
 <details><summary>DTV・TS抜きの録画環境で使える？</summary><div class="detail-body"><p>録画済みのMPEG-TSと、放送日時・放送局が対応するNicoJK形式の実況ログがあれば使えます。EDCBのNicojCatchで保存した同形式のログも対象です。NicoBE自体はテレビの受信・録画を行いません。コメントは保存ログのほか、過去ログAPIからも取得できます。</p></div></details>
 <details><summary>起動できない</summary><div class="detail-body"><p>「.NETが必要」と表示される場合は、<a href="https://aka.ms/dotnet/10.0/windowsdesktop-runtime-win-x64.exe?utm_source=chatgpt.com">.NET 10 Desktop Runtime（Windows x64）</a>を導入してください。ZIPはフォルダごと展開し、同梱DLLも一緒に配置します。</p><p>保存先のエラーは、表示されたフォルダのアクセス権と空き容量を確認してください。Windowsの保護機能で起動が止まる場合は、入手元と表示された警告内容を確認し、解決できなければお問い合わせください。</p></div></details>

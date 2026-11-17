@@ -485,7 +485,9 @@ NicoBEはMPC-BEとの連携開始時と連携中の30秒ごとに、使用中の
 
 ローカルの画像素材はGit管理に含めません。`assets\nicobe.ico` がなくてもビルドでき、その場合は標準アイコンを使います。独自アイコンを使う場合はこのパスへ配置してください。`tools\build-icon.ps1` はローカルの `assets\nicobe-source-white-outline.png` からアイコンを生成する任意の補助スクリプトです。
 
-放送局とNicoJKの対応表は `src/NicoBE/ChannelMap.cs` にあります。ローカルの `channels.json` があればそちらを使い、さらに `nicobe.json` の `channelOverrides` が優先されます。
+BS局はNicoJKの [jkch.sh.txt](https://github.com/xtne6f/NicoJK/blob/master/jkch.sh.txt) に合わせ、NHK BS（4:101／102 → jk101）、民放BS、WOWOW、BS11・BS12など46サービスに対応します（2026年11月17日確認）。旧局・サブチャンネルも含みます。局の対応があっても、過去ログAPIに対象日時のログがあるとは限りません。独自の `channels.json` は記載された局を優先し、未記載の局は内蔵表で補います。
+
+放送局とNicoJKの対応表は `src/NicoBE/ChannelMap.cs` にあります。ローカルの `channels.json` に記載された局はそちらを優先し、未記載の局は内蔵表で補います。さらに `nicobe.json` の `channelOverrides` が優先されます。
 
 MKV用DLLは `src/NicoBE.Mkv/runtime` から `app/mkv` にコピーされます。DLL自体の再ビルド方法は [MKV読み取りDLLのREADME](src/NicoBE.Mkv/README.md) を参照してください。
 
